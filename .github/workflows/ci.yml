@@ -1,0 +1,43 @@
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+env:
+  GITLEAKS_VERSION: 8.28.0
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks (pinned release, checksum verified)
+        run: |
+          set -euo pipefail
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL -O "${base}/${tarball}"
+          curl -sSfL -O "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          sha256sum --ignore-missing -c "gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          tar -xzf "${tarball}" gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+      - name: Scan full git history for secrets
+        run: gitleaks git --log-opts="--all" --redact --no-banner .
+      - name: Scan every commit message for secrets
+        run: |
+          set -euo pipefail
+          git log --all --format='%H%n%B' > "$RUNNER_TEMP/commit-messages.txt"
+          gitleaks dir "$RUNNER_TEMP/commit-messages.txt" --redact --no-banner
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: test $(wc -c < dist/task-card.html) -le 307200
+      - name: Scan the built card for secrets
+        run: gitleaks dir dist --redact --no-banner
