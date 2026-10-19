@@ -49,8 +49,13 @@ jobs:
         run: |
           set -euo pipefail
           for f in .claude-plugin/marketplace.json .agents/plugins/marketplace.json \
-                   plugin/.claude-plugin/plugin.json plugin/.mcp.json plugin/plugin.json plugin/mcp.json; do
+                   plugin/.claude-plugin/plugin.json plugin/.mcp.json plugin/.codex-plugin/plugin.json; do
             python3 -m json.tool "$f" > /dev/null
           done
       - name: Plugin helper tests
         run: python3 -m unittest discover -s tests/plugin -v
+      - name: Codex loader discovers the plugin's skill, connector and logo
+        run: |
+          set -euo pipefail
+          npm install -g @openai/codex@0.163.0
+          python3 tests/plugin/codex_probe.py .
