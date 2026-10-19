@@ -1,6 +1,6 @@
 {
   "name": "frontier",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Hand long, multi-step work on your files to Frontier's self-optimizing agents, follow it in a live task card, and get the finished files back into your folder.",
   "author": {
     "name": "Parallel Frontier Labs",
