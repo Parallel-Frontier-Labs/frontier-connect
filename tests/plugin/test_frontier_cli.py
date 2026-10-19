@@ -74,6 +74,8 @@ class Fake:
         self.blobs: dict[str, bytes] = {}
         self.blob_mode: dict[str, str] = {}  # name -> "short" | "redirect" | "500"
         self.base = ""
+        self.acks: list[dict] = []  # bodies POSTed to /v1/connect/t/saved
+        self.ack_status = 200
 
 
 def make_handler(fake: Fake):
@@ -111,6 +113,12 @@ def make_handler(fake: Fake):
         def do_POST(self):
             self._record()
             body = self._body()
+            if self.path == "/v1/connect/t/saved" and self._authed():
+                with fake.lock:
+                    fake.acks.append(json.loads(body))
+                if fake.ack_status != 200:
+                    return self._json(fake.ack_status, {"detail": "nope"})
+                return self._json(200, {"ok": True})
             if self.path != "/v1/connect/t/manifest" or not self._authed():
                 return self._json(404, {"detail": "not found"})
             if fake.manifest_status != 200:
@@ -1557,3 +1565,95 @@ class Cli(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SavedAck(Base):
+    """After a fetch that saved files, the helper tells Frontier the task folder's NAME only."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.to = self.dir / "dest"
+        self.to.mkdir()
+
+    offer = Fetch.offer
+    fetch = Fetch.fetch
+
+    def test_acks_the_folder_it_actually_wrote_to(self):
+        self.offer({"memo.md": b"m"})
+        code, out, _err = self.fetch()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.fake.acks, [{"dir": "Q3 report"}])
+        self.assertEqual(out["saved_to"], str(self.to / "Q3 report"))
+
+    def test_a_name_taken_by_other_work_acks_the_numbered_folder(self):
+        (self.to / "Q3 report").mkdir()
+        (self.to / "Q3 report" / "theirs.txt").write_bytes(b"x")
+        self.offer({"memo.md": b"m"})
+        code, out, _err = self.fetch()
+        self.assertEqual(code, 0)
+        self.assertEqual(out["saved_to"], str(self.to / "Q3 report (2)"))
+        self.assertEqual(self.fake.acks, [{"dir": "Q3 report (2)"}])
+
+    def test_a_retitled_task_acks_the_folder_its_marker_names(self):
+        self.offer({"memo.md": b"m"})
+        self.fetch()
+        self.offer({"memo.md": b"m2"}, suggested="Q3 report - revised")
+        code, out, _err = self.fetch()
+        self.assertEqual(code, 0)
+        self.assertEqual(out["saved_to"], str(self.to / "Q3 report"))
+        self.assertEqual(self.fake.acks, [{"dir": "Q3 report"}, {"dir": "Q3 report"}])
+
+    def test_unchanged_files_still_ack_and_the_body_is_never_a_path(self):
+        self.offer({"memo.md": b"m"})
+        self.fetch()
+        code, out, _err = self.fetch()
+        self.assertEqual((code, out["unchanged"]), (0, 1))
+        self.assertEqual(len(self.fake.acks), 2)
+        for ack in self.fake.acks:
+            self.assertEqual(set(ack), {"dir"})
+            self.assertNotIn("/", ack["dir"])
+            self.assertNotIn("\\", ack["dir"])
+            self.assertNotIn(str(self.dir), ack["dir"])
+
+    def test_one_file_failing_sends_no_ack(self):
+        self.offer({"ok.md": b"fine", "bad.md": b"never arrives"})
+        self.fake.blob_mode["1"] = "500"
+        code, out, _err = self.fetch()
+        self.assertEqual((code, out["added"], out["failed"]), (3, 1, ["bad.md"]))
+        self.assertEqual(self.fake.acks, [])
+
+    def test_every_file_saved_acks_once(self):
+        self.offer({"a.md": b"a", "b/c.md": b"c"})
+        code, out, _err = self.fetch()
+        self.assertEqual((code, out["added"], out["failed"]), (0, 2, []))
+        self.assertEqual(self.fake.acks, [{"dir": "Q3 report"}])
+
+    def test_a_kept_both_fetch_still_acks(self):
+        self.offer({"memo.docx": b"v1"})
+        self.fetch()
+        (self.to / "Q3 report" / "memo.docx").write_bytes(b"the user's edit")
+        self.offer({"memo.docx": b"v2"})
+        code, out, _err = self.fetch()
+        self.assertEqual((code, out["kept_both"]), (0, ["memo (2).docx"]))
+        self.assertEqual(self.fake.acks, [{"dir": "Q3 report"}, {"dir": "Q3 report"}])
+
+    def test_nothing_saved_sends_no_ack(self):
+        self.offer({})
+        code, _out, _err = self.fetch()
+        self.assertEqual(code, 0)
+        self.fake.blob_mode["0"] = "500"
+        self.offer({"memo.md": b"m"})
+        self.fake.blob_mode["0"] = "500"
+        code, _out, _err = self.fetch()
+        self.assertNotEqual(code, 0)
+        self.assertEqual(self.fake.acks, [])
+
+    def test_a_refused_ack_is_silent_and_keeps_the_exit_code(self):
+        for status in (404, 500, 400):
+            with self.subTest(status=status):
+                self.fake.ack_status = status
+                self.offer({f"memo{status}.md": b"m"})
+                code, out, err = self.fetch()
+                self.assertEqual((code, out["added"]), (0, 1))
+                self.assertNotIn("refused", err.lower())
+                self.assertNotIn("expired", err.lower())

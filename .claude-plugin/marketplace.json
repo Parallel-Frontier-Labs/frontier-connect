@@ -8,7 +8,9 @@
     {
       "name": "frontier",
       "source": "./plugin",
-      "description": "Delegate multi-step work on your files to Frontier's agents and get the finished files back into your folder."
+      "description": "Delegate multi-step work on your files to Frontier's agents and get the finished files back into your folder.",
+      "author": { "name": "Parallel Frontier Labs", "url": "https://parallelfrontier.io" },
+      "category": "productivity"
     }
   ]
 }

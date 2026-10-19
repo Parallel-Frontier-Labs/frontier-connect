@@ -52,6 +52,9 @@ hidden `.frontier-task` file records that), and it keeps any file you changed, s
 version alongside as `name (2)`. If a fetch is interrupted, run it again: a file whose save
 was cut off is kept as it is, the complete version is saved alongside as `name (2)`, and the
 assistant tells you which files were affected so you can delete the incomplete copies.
+After a fetch that saved every file, the helper tells Frontier the name of the task's folder
+(only its name, never where it is on your computer), so the task card can show the files as
+saved.
 
 ## Layout note
 

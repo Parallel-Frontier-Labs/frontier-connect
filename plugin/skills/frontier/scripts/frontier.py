@@ -18,6 +18,8 @@ Frontier delivered last time is updated in place; a file the user changed (or th
 not put there) is kept and the new version saved alongside as "name (2)". Nothing in --to is
 ever deleted or renamed, which a connected folder may refuse: downloads go to a private
 temporary folder first and are then written into place.
+After a fetch that saved every file, the helper tells Frontier the NAME of the task's folder
+(never a path), so the task card can say the files are in the user's folder.
 Pass `--ticket -` to read the ticket link from stdin instead of the command line.
 
 Exit codes: 0 done, 1 Frontier or the network refused, 2 usage error, 3 some files failed.
@@ -1106,6 +1108,18 @@ def _drop_unused_plans(files: dict, planned: set, claimed: set) -> None:
             del files[k]
 
 
+def ack_saved(origin: str, raw: str, dest: str, test: bool) -> None:
+    """Tell Frontier the files are in the user's folder: only the task folder's own name (its
+    basename), never a path. Best effort and silent: the files are saved either way."""
+    name = os.path.basename(os.path.normpath(dest))
+    if not name:
+        return
+    try:
+        ticket_call(origin, raw, "POST", "/saved", {"dir": name}, test)
+    except Exception:  # noqa: BLE001 - an acknowledgement never changes the outcome
+        pass
+
+
 def fetch(args: argparse.Namespace) -> int:
     origin, raw = parse_ticket(args.ticket, args.base)
     test = args.base is not None
@@ -1210,6 +1224,11 @@ def fetch(args: argparse.Namespace) -> int:
 
     shown = dest or os.path.join(to, base_name)
     written = counts["added"] + counts["updated"] + len(kept_both)
+    # Only a complete fetch says "saved": every listed file is in place (new versions kept
+    # alongside count), none failed, none was cut off now or left cut off from before.
+    if (dest is not None and written + counts["unchanged"] > 0 and not failed and not partial
+            and not interrupted):
+        ack_saved(origin, raw, dest, test)
     if not listed:
         print("Frontier has not delivered any files for this task yet.", file=sys.stderr)
     else:
