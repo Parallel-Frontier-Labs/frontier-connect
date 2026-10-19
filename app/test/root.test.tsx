@@ -22,6 +22,8 @@ function rig(theme: 'light' | 'dark' = 'light', tools = false, answer: Bridge['a
     onList: () => {},
     listTasks: async () => ({ kind: 'failed', message: '' }),
     deleteTask: async () => ({ kind: 'failed', message: '' }),
+    fileLink: async () => ({ kind: 'failed', message: '' }),
+    openLink: async () => false,
   };
   return {
     bridge,

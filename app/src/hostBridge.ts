@@ -1,11 +1,22 @@
 import { App } from '@modelcontextprotocol/ext-apps';
-import type { AnswerOutcome, Bridge, DeleteOutcome, ListOutcome } from './bridge';
+import type { AnswerOutcome, Bridge, DeleteOutcome, LinkOutcome, ListOutcome } from './bridge';
 import { parseList, type ListPayload } from './list';
 import { parsePayload, type TaskPayload } from './types';
 
 export const SEND_FAILED = "Couldn't send your answer. Try again, or reply in the chat.";
 export const LIST_FAILED = "Couldn't load your tasks. Try again, or ask in the chat.";
 export const DELETE_FAILED = "Couldn't delete the task. Try again.";
+export const LINK_FAILED = "Couldn't prepare the download. Try again.";
+
+/** Only an https URL is ever opened or shown as a link (never javascript:, data: or the like). */
+export function safeHttps(u: unknown): string | null {
+  if (typeof u !== 'string' || u.length > 8192) return null;
+  try {
+    return new URL(u).protocol === 'https:' ? u : null;
+  } catch {
+    return null;
+  }
+}
 
 /** A short, plain message from an error tool result, or the generic line. */
 function errorLine(r: { structuredContent?: unknown; content?: unknown } | undefined, fallback = SEND_FAILED): string {
@@ -22,7 +33,8 @@ function errorLine(r: { structuredContent?: unknown; content?: unknown } | undef
  * changes), `app.ontoolresult = (params) => ...` (`params.structuredContent`), `app.connect(transport?)`
  * (defaults to a postMessage transport to the parent window), `app.callServerTool({ name, arguments })`
  * -> CallToolResult, `app.getHostCapabilities()?.serverTools` (the host proxies app tool calls),
- * `app.getHostContext()?.theme`, `app.onhostcontextchanged`.
+ * `app.getHostContext()?.theme`, `app.onhostcontextchanged`, `app.openLink({ url })` -> `{ isError? }`
+ * (`ui/open-link`; offered when `getHostCapabilities()?.openLinks` is set).
  */
 export function createHostBridge(
   app: App = new App({ name: 'frontier-task', version: '0.2.0' }, {}, { autoResize: true }),
@@ -133,6 +145,32 @@ export function createHostBridge(
         return { kind: 'refused', reason };
       }
       return { kind: 'failed', message: DELETE_FAILED };
+    },
+    async fileLink(taskId, path): Promise<LinkOutcome> {
+      let r: Awaited<ReturnType<App['callServerTool']>> | undefined;
+      try {
+        r = await app.callServerTool({
+          name: 'frontier_file_link',
+          arguments: path === null ? { task_id: taskId } : { task_id: taskId, path },
+        });
+      } catch {
+        return { kind: 'failed', message: LINK_FAILED };
+      }
+      if (!r || r.isError) return { kind: 'failed', message: errorLine(r, LINK_FAILED) };
+      const sc = r.structuredContent as { url?: unknown; name?: unknown } | undefined;
+      const url = safeHttps(sc?.url);
+      if (!url) return { kind: 'failed', message: LINK_FAILED };
+      const name = typeof sc?.name === 'string' && sc.name.trim() ? sc.name.trim().slice(0, 300) : 'download';
+      return { kind: 'ok', url, name };
+    },
+    async openLink(url): Promise<boolean> {
+      if (!app.getHostCapabilities?.()?.openLinks || typeof app.openLink !== 'function') return false;
+      try {
+        const r = await app.openLink({ url });
+        return !r?.isError;
+      } catch {
+        return false;
+      }
     },
     async answer(taskId, askId, answers): Promise<AnswerOutcome> {
       let r: Awaited<ReturnType<App['callServerTool']>> | undefined;

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { DeleteOutcome, ListQuery, Stale } from '../bridge';
 import { formatWork } from '../format';
 import {
@@ -52,6 +52,33 @@ function TrashIcon() {
   );
 }
 
+/** The gap between the "…" button and its menu. */
+const MENU_GAP = 4;
+
+export interface MenuPlace {
+  /** Which side of the "…" button the menu opens on. */
+  placement: 'up' | 'down';
+  /** The menu's top, in px from the top of its row. */
+  top: number;
+  /** Extra height the card needs below its content so a downward menu is not clipped. */
+  room: number;
+}
+
+/**
+ * Where to open a row menu. The card clips its content and the host sizes the iframe to the
+ * card's content height, so a menu below the last row was cut off: open it downward when it
+ * fits above the card's (and the viewport's) bottom, else upward when it fits below their top,
+ * else downward with the missing height reserved so the card (and the reported size) grows.
+ */
+export function placeMenu(trigger: DOMRect, row: DOMRect, card: DOMRect, menuHeight: number, viewport: number): MenuPlace {
+  const below = Math.min(card.bottom, viewport) - trigger.bottom - MENU_GAP;
+  const above = trigger.top - Math.max(card.top, 0) - MENU_GAP;
+  const down = trigger.bottom - row.top + MENU_GAP;
+  if (menuHeight <= below) return { placement: 'down', top: down, room: 0 };
+  if (menuHeight <= above) return { placement: 'up', top: trigger.top - row.top - MENU_GAP - menuHeight, room: 0 };
+  return { placement: 'down', top: down, room: Math.ceil(menuHeight - Math.max(below, 0)) };
+}
+
 export interface ListActions {
   /** The host forwards the card's tool calls: filters, Show more, open and delete work. */
   enabled: boolean;
@@ -61,10 +88,11 @@ export interface ListActions {
 }
 
 function Row({
-  item, actions, menuOpen, setMenu, confirming, setConfirm, onDeleted,
+  item, actions, menuOpen, setMenu, confirming, setConfirm, onDeleted, setRoom,
 }: {
   item: ListItem; actions: ListActions; menuOpen: boolean; setMenu: (id: string | null) => void;
   confirming: boolean; setConfirm: (id: string | null) => void; onDeleted: (item: ListItem) => void;
+  setRoom: (id: string, px: number) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,7 +100,24 @@ function Row({
   const menuRef = useRef<HTMLUListElement>(null);
   const moreRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const [place, setPlace] = useState<MenuPlace | null>(null);
   const live = isLive(item.status);
+  // Measure before paint: flip the menu above the "…" button, or grow the card, when it would be clipped.
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    const more = moreRef.current;
+    const row = more?.closest('.fc-row');
+    const card = more?.closest('.fc-card');
+    if (!menuOpen || !menu || !more || !row || !card) {
+      setPlace(null);
+      return;
+    }
+    const p = placeMenu(more.getBoundingClientRect(), row.getBoundingClientRect(), card.getBoundingClientRect(),
+      menu.getBoundingClientRect().height, window.innerHeight);
+    setPlace(p);
+    setRoom(item.task_id, p.room);
+    return () => setRoom(item.task_id, 0);
+  }, [menuOpen]);
   useEffect(() => {
     if (menuOpen) menuRef.current?.querySelector<HTMLButtonElement>('button:not([disabled])')?.focus();
   }, [menuOpen]);
@@ -169,6 +214,7 @@ function Row({
       </div>
       {menuOpen ? (
         <ul class="fc-menu" role="menu" aria-label={`${item.title} actions`} ref={menuRef}
+          data-placement={place?.placement} style={place ? { top: `${place.top}px` } : undefined}
           onKeyDown={(e) => { if (e.key === 'Escape') { setMenu(null); moreRef.current?.focus(); } }}>
           <li role="none">
             <button type="button" class="fc-mi" role="menuitem" onClick={() => void open()}>Open</button>
@@ -219,6 +265,11 @@ export function TaskList({
   const [moreFailed, setMoreFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [said, setSaid] = useState<string>('');
+  // Keyed by task, so one row closing its menu never clears the room another row's menu took.
+  const [roomFor, setRoomFor] = useState<{ id: string; px: number } | null>(null);
+  const setRoom = (id: string, px: number) =>
+    setRoomFor((r) => (px > 0 ? { id, px } : r?.id === id ? null : r));
+  const room = roomFor?.px ?? 0;
   const headRef = useRef<HTMLDivElement>(null);
   const f = list.filters;
 
@@ -290,7 +341,7 @@ export function TaskList({
         <ul class={loading === 'filter' ? 'fc-rows fc-rows-busy' : 'fc-rows'} aria-label="Tasks, newest first" aria-busy={loading === 'filter' || undefined}>
           {list.items.map((it) => (
             <Row key={it.task_id} item={it} actions={actions} menuOpen={menu === it.task_id} setMenu={setMenu}
-              confirming={confirm === it.task_id} setConfirm={setConfirm}
+              confirming={confirm === it.task_id} setConfirm={setConfirm} setRoom={setRoom}
               onDeleted={(item) => {
                 setConfirm(null);
                 setSaid(`Deleted "${item.title}".`);
@@ -325,6 +376,9 @@ export function TaskList({
         </div>
       ) : null}
       <div class="fc-sr" aria-live="polite" aria-atomic="true">{live}</div>
+      {/* Room for an open menu that fits on neither side: the card grows, so the size the card
+          reports to the host (ui/notifications/size-changed, measured from the document) includes it. */}
+      {room > 0 ? <div class="fc-menu-room" aria-hidden="true" style={{ height: `${room}px` }} /> : null}
     </article>
   );
 }

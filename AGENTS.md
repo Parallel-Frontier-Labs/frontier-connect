@@ -51,7 +51,8 @@ unsure, continue. In a new chat where the user refers to earlier work, find that
    them answer it. If the result says `accepted: false`, relay its one-line reason.
 6. **Steering.** If the user wants to change a running task (skip a section, change focus), call
    `frontier_steer` with their words. Do not start a new task for it.
-7. **Done.** Point the user to the deliverables by name.
+7. **Done.** Point the user to the deliverables by name. Without the plugin, the user can download
+   them from the task card (each file, or the folder as a .zip).
 
 8. **Follow-ups.** When the user asks for more (a change, an extra section, another file), call
    `frontier_continue_task` with the chat's `task_id` and their words. It keeps the same files,

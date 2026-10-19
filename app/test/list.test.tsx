@@ -222,3 +222,79 @@ describe('TaskList', () => {
     expect(container.querySelector('.fc-card')!.getAttribute('data-theme')).toBe('dark');
   });
 });
+
+describe('TaskList row menu placement', () => {
+  // jsdom has no layout: give the card, row, "…" trigger and menu fixed boxes (viewport coords).
+  const box = (top: number, height: number) =>
+    ({ top, bottom: top + height, height, left: 0, right: 300, width: 300, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+  const layout = (o: { cardTop: number; cardBottom: number; viewport: number }) => {
+    vi.stubGlobal('innerHeight', o.viewport);
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      if (this.classList.contains('fc-card')) return box(o.cardTop, o.cardBottom - o.cardTop);
+      if (this.classList.contains('fc-menu')) return box(0, 82);
+      if (this.classList.contains('fc-moreb')) return box(120, 32);
+      if (this.classList.contains('fc-row')) return box(110, 62);
+      return box(0, 0);
+    });
+  };
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  const openMenu = () => {
+    const r = render(<TaskList list={mkList()} actions={acts()} />);
+    fireEvent.click(r.getByRole('button', { name: 'More actions for Task 1' }));
+    return { ...r, menu: r.getByRole('menu') as HTMLElement };
+  };
+
+  it('a single-row list opens the menu upward when the space below the trigger is short', () => {
+    layout({ cardTop: 0, cardBottom: 200, viewport: 200 }); // 44px below the trigger, 116px above
+    const { menu, container, getByRole } = openMenu();
+    expect(menu.getAttribute('data-placement')).toBe('up');
+    expect(menu.style.top).toBe('-76px'); // trigger top (10px into the row) - 82px menu - 4px gap
+    expect(container.querySelector('.fc-menu-room')).toBeNull();
+    // Keyboard and focus are unchanged: focus lands on Open, Escape closes and returns focus.
+    expect(document.activeElement).toBe(getByRole('menuitem', { name: 'Open' }));
+    fireEvent.keyDown(menu, { key: 'Escape' });
+    expect(document.activeElement).toBe(getByRole('button', { name: 'More actions for Task 1' }));
+  });
+
+  it('opens downward when there is room below', () => {
+    layout({ cardTop: 0, cardBottom: 400, viewport: 400 });
+    const { menu, container } = openMenu();
+    expect(menu.getAttribute('data-placement')).toBe('down');
+    expect(menu.style.top).toBe('46px'); // trigger bottom (42px into the row) + 4px gap
+    expect(container.querySelector('.fc-menu-room')).toBeNull();
+  });
+
+  it('the viewport bounds the space below as well as the card', () => {
+    layout({ cardTop: 0, cardBottom: 400, viewport: 200 });
+    expect(openMenu().menu.getAttribute('data-placement')).toBe('up');
+  });
+
+  it('when neither side fits, opens downward and grows the card so the reported size includes the menu', () => {
+    layout({ cardTop: 100, cardBottom: 200, viewport: 200 }); // 44px below, 16px above
+    const { menu, container, getByRole } = openMenu();
+    expect(menu.getAttribute('data-placement')).toBe('down');
+    const room = container.querySelector('.fc-card > .fc-menu-room') as HTMLElement;
+    expect(room.style.height).toBe('38px'); // 82px menu - 44px below
+    // Closing the menu (click outside) gives the room back.
+    fireEvent.mouseDown(document.body);
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+    expect(container.querySelector('.fc-menu-room')).toBeNull();
+    // The delete confirm still works from a flipped or grown menu.
+    fireEvent.click(getByRole('button', { name: 'More actions for Task 1' }));
+    fireEvent.click(getByRole('menuitem', { name: /Delete/ }));
+    getByRole('alertdialog');
+    expect(container.querySelector('.fc-menu-room')).toBeNull();
+  });
+
+  it('moving straight from one row\'s menu to another keeps the room the new menu needs', () => {
+    layout({ cardTop: 100, cardBottom: 200, viewport: 200 });
+    const { getByRole, container } = render(<TaskList list={mkList({ items: [item(1), item(2)], total: 2, shown: 2 })} actions={acts()} />);
+    fireEvent.click(getByRole('button', { name: 'More actions for Task 2' }));
+    fireEvent.click(getByRole('button', { name: 'More actions for Task 1' }));
+    expect(getByRole('menu').getAttribute('aria-label')).toBe('Task 1 actions');
+    expect((container.querySelector('.fc-menu-room') as HTMLElement).style.height).toBe('38px');
+  });
+});

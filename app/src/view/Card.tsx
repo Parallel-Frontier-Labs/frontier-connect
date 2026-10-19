@@ -5,6 +5,7 @@ import { AnsweredView, type Answered } from './Answered';
 import { Done } from './Done';
 import { Ended } from './Ended';
 import { FilesAsk } from './FilesAsk';
+import type { DownloadApi } from './Files';
 import { Footer } from './Footer';
 import { FormAsk } from './FormAsk';
 import { Mark, Now } from './icons';
@@ -68,11 +69,14 @@ export function Card({
   payload: p,
   theme = 'light',
   answer = NO_ANSWERS,
+  download,
   onBack,
 }: {
   payload: TaskPayload;
   theme?: 'light' | 'dark';
   answer?: AnswerApi;
+  /** Download buttons for the delivered files (hosts that forward the card's tool calls). */
+  download?: DownloadApi;
   /** Opened from "Your Frontier tasks": a "← All tasks" bar returns to the list. */
   onBack?: () => void;
 }) {
@@ -105,7 +109,7 @@ export function Card({
 
   let body = null;
   if (terminal) {
-    body = p.status === 'done' ? <Done payload={p} /> : <Ended payload={p} />;
+    body = p.status === 'done' ? <Done payload={p} download={download} /> : <Ended payload={p} download={download} />;
   } else if (waiting && ask && !lockedAsk) {
     const send = (answers: Answers) => answer.send(ask.ask_id!, answers);
     const askView =

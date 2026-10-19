@@ -1,4 +1,6 @@
-import { useMemo, useState } from 'preact/hooks';
+import { useMemo, useRef, useState } from 'preact/hooks';
+import type { DownloadOutcome, Stale } from '../bridge';
+import { LINK_FAILED } from '../hostBridge';
 import { allDirs, buildDelivery, findFile, firstFile, type TreeNode } from '../tree';
 import type { Deliverable } from '../types';
 import { CloudIcon, DownloadIcon, FolderIcon, TreeChevron } from './icons';
@@ -18,18 +20,59 @@ function Ext({ name }: { name: string }) {
   return <span class={`fc-ext fc-ext-${tone}`} aria-hidden="true">{ext || 'file'}</span>;
 }
 
+/** The deliverable's own path, as the task sent it (tree keys are `<index>:<path>`). */
+const srcPath = (key: string) => key.slice(key.indexOf(':') + 1);
+
 const Sep = () => <span class="fc-sep">/</span>;
 
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
+/** Download buttons (hosts without the Frontier plugin): `get(path)` asks for a browser link for
+ * one delivered file, or the zipped folder when `path` is null, and has the host open it. */
+export interface DownloadApi {
+  enabled: boolean;
+  get(path: string | null): Promise<DownloadOutcome | Stale>;
+}
+export const NO_DOWNLOADS: DownloadApi = { enabled: false, get: async () => ({ kind: 'stale' }) };
+
+/** The last download's outcome worth a line: a failure (with Retry) or a link to click. */
+type Note = { path: string | null; label: string; kind: 'failed'; message: string } | { path: string | null; label: string; kind: 'link'; url: string; name: string };
+
+function useDownloads(api: DownloadApi) {
+  // Paths being prepared ('' is the folder), so each button shows its own "Preparing…".
+  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
+  const [note, setNote] = useState<Note | null>(null);
+  const live = useRef(new Set<string>());
+  const run = async (path: string | null, label: string) => {
+    const k = path ?? '';
+    if (live.current.has(k)) return;
+    live.current.add(k);
+    setBusy(new Set(live.current));
+    setNote((n) => (n && (n.path ?? '') === k ? null : n));
+    let out: DownloadOutcome | Stale;
+    try {
+      out = await api.get(path);
+    } catch {
+      out = { kind: 'failed', message: LINK_FAILED };
+    }
+    live.current.delete(k);
+    setBusy(new Set(live.current));
+    // Stale: the card moved on (another view, or the task was deleted); nothing to show.
+    if (out.kind === 'failed') setNote({ path, label, kind: 'failed', message: out.message });
+    else if (out.kind === 'link') setNote({ path, label, kind: 'link', url: out.url, name: out.name });
+  };
+  return { busy, note, run };
+}
+
 /**
  * The delivered files, view-only: where they are (the task's workspace), then the tree. Every listed
  * file is a deliverable, so rows carry no per-file tag and every folder starts open; the path line
- * follows the selected row. Downloads happen in Frontier, so rows select but never open or link.
+ * follows the selected row. Rows select; when the host forwards the card's tool calls, each file has
+ * a download button and the folder a "Download folder (.zip)" button (the host opens the link).
  * A plain nested list of buttons (folders toggle with aria-expanded, the selected file has
  * aria-current): no tree role, since the rows are ordinary tab stops.
  */
-export function DeliveredFiles({ files }: { files: Deliverable[] }) {
+export function DeliveredFiles({ files, download = NO_DOWNLOADS }: { files: Deliverable[]; download?: DownloadApi }) {
   const d = useMemo(() => buildDelivery(files), [files]);
   const dirs = useMemo(() => allDirs(d.nodes), [d]);
   const [open, setOpen] = useState<Set<string> | null>(null);
@@ -43,6 +86,9 @@ export function DeliveredFiles({ files }: { files: Deliverable[] }) {
     setOpen(next);
   };
   const segs = selected ? selected.path.split('/') : [];
+  const dl = useDownloads(download);
+  const folderBusy = dl.busy.has('');
+  const note = dl.note;
   return (
     <section class="fc-files" aria-label="Files">
       <div class="fc-loc">
@@ -62,8 +108,30 @@ export function DeliveredFiles({ files }: { files: Deliverable[] }) {
             )}
           </div>
         </div>
-        <span class="fc-loc-hint"><DownloadIcon />Open in Frontier to download</span>
+        {download.enabled ? (
+          <button type="button" class="fc-secondary fc-secondary-sm fc-dlall" aria-disabled={folderBusy ? 'true' : undefined}
+            aria-busy={folderBusy ? 'true' : undefined} onClick={() => void dl.run(null, 'the folder')}>
+            <DownloadIcon />
+            {folderBusy ? 'Preparing…' : 'Download folder (.zip)'}
+          </button>
+        ) : (
+          <span class="fc-loc-hint"><DownloadIcon />Open in Frontier to download</span>
+        )}
       </div>
+      {note ? (
+        note.kind === 'failed' ? (
+          <p class="fc-dlnote" role="alert">
+            <span class="fc-err">{note.message}</span>
+            <button type="button" class="fc-toggle" aria-label={`Retry downloading ${note.label}`}
+              onClick={() => void dl.run(note.path, note.label)}>Retry</button>
+          </p>
+        ) : (
+          <p class="fc-dlnote" role="status">
+            <span class="fc-muted">Open this link to download:</span>
+            <a class="fc-dllink" href={note.url} target="_blank" rel="noopener noreferrer" download={note.name}>{note.name}</a>
+          </p>
+        )
+      ) : null}
       <div class="fc-files-bar">
         <h3 class="fc-cap">{`Files · ${d.fileCount}`}</h3>
         {d.nested ? (
@@ -76,7 +144,8 @@ export function DeliveredFiles({ files }: { files: Deliverable[] }) {
       </div>
       <div class="fc-treebox">
         <ul class="fc-tree" aria-label="Delivered files">
-          <Rows nodes={d.nodes} depth={0} nested={d.nested} openSet={openSet} selected={selected?.key ?? null} onToggle={toggle} onSelect={setPicked} />
+          <Rows nodes={d.nodes} depth={0} nested={d.nested} openSet={openSet} selected={selected?.key ?? null} onToggle={toggle} onSelect={setPicked}
+            onDownload={download.enabled ? (path, name) => void dl.run(path, name) : undefined} busy={dl.busy} />
         </ul>
         {selected ? (
           <div class="fc-mono fc-pathline" title={selected.path}>
@@ -102,8 +171,10 @@ function Rows(props: {
   selected: string | null;
   onToggle: (path: string) => void;
   onSelect: (key: string) => void;
+  onDownload?: (path: string, name: string) => void;
+  busy: ReadonlySet<string>;
 }) {
-  const { nodes, depth, nested, openSet, selected, onToggle, onSelect } = props;
+  const { nodes, depth, nested, openSet, selected, onToggle, onSelect, onDownload, busy } = props;
   const pad = 10 + depth * 22;
   return (
     <>
@@ -123,12 +194,19 @@ function Rows(props: {
             ) : null}
           </li>
         ) : (
-          <li key={n.key}>
+          <li key={n.key} class={onDownload ? 'fc-tfile' : undefined}>
             <button type="button" class="fc-trow" style={{ paddingLeft: `${nested ? pad + 22 : pad}px` }}
               aria-current={selected === n.key ? 'true' : undefined} onClick={() => onSelect(n.key)}>
               <Ext name={n.name} />
               <span class="fc-tname" title={n.name}>{n.name}</span>
             </button>
+            {onDownload ? ((src) => (
+              <button type="button" class="fc-dl" aria-label={busy.has(src) ? `Preparing ${n.name}` : `Download ${n.name}`}
+                title={busy.has(src) ? 'Preparing…' : 'Download'} aria-disabled={busy.has(src) ? 'true' : undefined}
+                aria-busy={busy.has(src) ? 'true' : undefined} onClick={() => onDownload(src, n.name)}>
+                {busy.has(src) ? <span class="fc-dlspin" aria-hidden="true" /> : <DownloadIcon />}
+              </button>
+            ))(srcPath(n.key)) : null}
           </li>
         ),
       )}

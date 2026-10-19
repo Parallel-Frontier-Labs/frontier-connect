@@ -15,6 +15,10 @@ export type Stale = { kind: 'stale' };
 
 export interface ListQuery { days: number; status?: ListStatus | null; source?: Source | null; cursor?: string | null }
 export type ListOutcome = { kind: 'ok'; list: ListPayload } | { kind: 'failed'; message: string };
+/** A browser link for one delivered file or the zipped folder (frontier_file_link). */
+export type LinkOutcome = { kind: 'ok'; url: string; name: string } | { kind: 'failed'; message: string };
+/** What came of a download click: the host opened the link, or the card shows it as a plain link. */
+export type DownloadOutcome = { kind: 'opened' } | { kind: 'link'; url: string; name: string } | { kind: 'failed'; message: string };
 export type DeleteOutcome = { kind: 'deleted' } | { kind: 'refused'; reason: string } | { kind: 'failed'; message: string };
 
 export interface Bridge {
@@ -39,4 +43,10 @@ export interface Bridge {
   listTasks(q: ListQuery): Promise<ListOutcome>;
   /** frontier_delete_task (app-only): only ever called from the user's click on Delete. Never retried. */
   deleteTask(taskId: string): Promise<DeleteOutcome>;
+  /** frontier_file_link (app-only): a presigned link for one delivered file (`path`, as the card
+   * shows it) or the zipped folder (`path` null). Only ever called from the user's click. */
+  fileLink(taskId: string, path: string | null): Promise<LinkOutcome>;
+  /** Ask the host to open `url` in the user's browser (MCP Apps `ui/open-link`). False when the
+   * host has no link support or declined: the card then shows the link itself. */
+  openLink(url: string): Promise<boolean>;
 }

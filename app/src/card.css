@@ -326,6 +326,16 @@ button:disabled { cursor: default; }
 .fc-ext-red { background: var(--bad-bg); color: var(--bad-ink); }
 .fc-ext-amber { background: var(--warn-bg); color: var(--warn-ink); }
 .fc-tsz { margin-left: auto; flex: none; font: 11px var(--mono); color: var(--faint-ink); }
+.fc-tfile { position: relative; }
+.fc-tfile > .fc-trow { padding-right: 48px; }
+.fc-dl { position: absolute; right: 6px; top: 4px; width: 28px; height: 28px; border: 0; border-radius: 6px; background: none; color: var(--muted); display: flex; align-items: center; justify-content: center; }
+.fc-dl:hover { background: var(--chip); color: var(--fg); }
+.fc-dl[aria-disabled='true'], .fc-dlall[aria-disabled='true'] { cursor: progress; }
+.fc-dlall { flex: none; gap: 6px; }
+.fc-dlspin { width: 12px; height: 12px; border: 1.5px solid var(--line); border-top-color: var(--muted); border-radius: 50%; animation: fc-spin 0.8s linear infinite; }
+@keyframes fc-spin { to { transform: rotate(360deg); } }
+.fc-dlnote { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12.5px; padding: 0 2px; }
+.fc-dllink { font-weight: 600; color: var(--fg); text-underline-offset: 3px; overflow-wrap: anywhere; }
 .fc-pathline { border-top: 1px solid var(--line); padding: 10px 16px; font-size: 11.5px; color: var(--faint-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Steps disclosure */
@@ -362,9 +372,10 @@ button:disabled { cursor: default; }
   .fc-body, .fc-meter, .fc-timeline, .fc-form-body { padding-left: 16px; padding-right: 16px; }
   .fc-foot, .fc-form-foot { padding-left: 16px; padding-right: 16px; }
   .fc-loc-hint { width: 100%; }
+  .fc-dlall { width: 100%; justify-content: center; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .fc-halo, .fc-runner, .fc-seg-run { animation: none; }
+  .fc-halo, .fc-runner, .fc-seg-run, .fc-dlspin { animation: none; }
   .fc-seg-run { width: 100%; opacity: 0.5; }
   .fc-halo { opacity: 0.5; }
   .fc-runner { width: 100%; opacity: 0.35; }

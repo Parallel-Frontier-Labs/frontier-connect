@@ -80,6 +80,7 @@ can find and use them by name.
 | `frontier_answer` | Sends the user's answer to a task's question or form. The task card uses it too. |
 | `frontier_steer` | Gives a running task new guidance from the user. |
 | `frontier_delete_task` | Used only by the card, when you click Delete and confirm. Hidden from the assistant. |
+| `frontier_file_link` | Used only by the card's download buttons (one file, or the folder as a .zip): a short-lived link the chat app opens in your browser. Hidden from the assistant. |
 
 Deleting a task is something only you do, in the card: open the task list, choose Delete on a
 task and confirm. The assistant cannot delete tasks.

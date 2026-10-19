@@ -1,12 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { AnswerOutcome, Answers, Bridge, DeleteOutcome, ListQuery, Stale } from './bridge';
+import type { AnswerOutcome, Answers, Bridge, DeleteOutcome, DownloadOutcome, ListQuery, Stale } from './bridge';
 import { Generations, type Guarded, type Tag } from './generation';
-import { createHostBridge, LIST_FAILED } from './hostBridge';
+import { createHostBridge, LINK_FAILED, LIST_FAILED } from './hostBridge';
 import { appendPage, type ListPayload } from './list';
 import { Poller } from './poller';
 import { Card, type AnswerApi } from './view/Card';
+import type { DownloadApi } from './view/Files';
 import { TaskList, type ListActions } from './view/TaskList';
 import type { TaskPayload } from './types';
+
+/** How long the host gets to open a download link before the card shows the link itself. */
+export const OPEN_LINK_WAIT_MS = 5000;
+
+/** `p`, or false once `ms` pass or it rejects. */
+function withTimeout(p: Promise<boolean>, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const t = setTimeout(() => resolve(false), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      () => { clearTimeout(t); resolve(false); },
+    );
+  });
+}
 
 export const OPEN_FAILED = "Couldn't open the task. Try again, or ask in the chat.";
 export const TASK_DELETED = 'This task was deleted.';
@@ -162,6 +177,31 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
     [canAnswer],
   );
 
+  const download: DownloadApi = useMemo(
+    () => ({
+      enabled: canAnswer,
+      async get(path: string | null): Promise<DownloadOutcome | Stale> {
+        const b = bridgeRef.current;
+        const taskId = taskRef.current;
+        if (!b || !taskId) return { kind: 'failed', message: LINK_FAILED };
+        if (deleted.has(taskId)) return STALE;
+        // Through the guard, judged by task like answers: a link that arrives after the card shows
+        // another task (or the list), or after the task was deleted, is dropped and never opened. A
+        // host result for the same task (the model re-reading it) does not drop it.
+        const gone = () => shownTask.current !== taskId || deleted.has(taskId);
+        const r = await gens.run(() => b.fileLink(taskId, path));
+        if (gone()) return STALE;
+        if (r.value.kind === 'failed') return r.value;
+        const { url, name } = r.value;
+        // A host that never answers (a confirm dialog left open) or rejects: show the link itself.
+        const opened = await gens.run(() => withTimeout(b.openLink(url), OPEN_LINK_WAIT_MS));
+        if (gone()) return STALE;
+        return opened.value ? { kind: 'opened' } : { kind: 'link', url, name };
+      },
+    }),
+    [canAnswer],
+  );
+
   const actions: ListActions = useMemo(
     () => ({
       enabled: canAnswer,
@@ -238,7 +278,8 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
   }
   if (payload && mode.kind === 'task') {
     return (
-      <Card key={payload.task_id} payload={payload} theme={theme} answer={answer} onBack={mode.fromList && list ? back : undefined} />
+      <Card key={payload.task_id} payload={payload} theme={theme} answer={answer} download={download}
+        onBack={mode.fromList && list ? back : undefined} />
     );
   }
   if (connectFailed) {
