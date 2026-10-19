@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { AnswerOutcome, Answers, Bridge, DeleteOutcome, ListQuery } from './bridge';
+import type { AnswerOutcome, Answers, Bridge, DeleteOutcome, ListQuery, Stale } from './bridge';
+import { Generations, type Guarded, type Tag } from './generation';
 import { createHostBridge, LIST_FAILED } from './hostBridge';
 import { appendPage, type ListPayload } from './list';
 import { Poller } from './poller';
@@ -7,21 +8,24 @@ import { Card, type AnswerApi } from './view/Card';
 import { TaskList, type ListActions } from './view/TaskList';
 import type { TaskPayload } from './types';
 
-const sameFilters = (a: ListPayload | null, b: ListPayload | null): boolean =>
-  !!a && !!b && a.filters.days === b.filters.days && a.filters.status === b.filters.status && a.filters.source === b.filters.source;
-
 export const OPEN_FAILED = "Couldn't open the task. Try again, or ask in the chat.";
+export const TASK_DELETED = 'This task was deleted.';
+const STALE: Stale = { kind: 'stale' };
 
 /**
- * What the card shows: a task (from a task tool result, or opened from the list), or the list of
- * the user's tasks. The list state (filters, loaded rows, scroll) lives here, so "← All tasks"
- * comes back to exactly where the user was.
+ * What the card shows: a task (from a task tool result, or opened from the list), the list of the
+ * user's tasks, or a note that the task shown was deleted. The list state (filters, loaded rows,
+ * scroll) lives here, so "← All tasks" comes back to exactly where the user was.
+ *
+ * Every server call goes through `gens.run` (see generation.ts), so a result that arrives after the
+ * card moved on is dropped; and every result passes the `deleted` filter, so a task deleted from
+ * the card never comes back from a late read.
  */
-type Mode = { kind: 'task'; fromList: boolean } | { kind: 'list' };
+type Mode = { kind: 'task'; fromList: boolean } | { kind: 'list' } | { kind: 'deleted'; fromList: boolean };
 
 export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: () => Bridge }) {
   const [payload, setPayload] = useState<TaskPayload | null>(null);
-  const [list, setList] = useState<ListPayload | null>(null);
+  const [list, setListState] = useState<ListPayload | null>(null);
   const [mode, setMode] = useState<Mode>({ kind: 'task', fromList: false });
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const [connectFailed, setConnectFailed] = useState(false);
@@ -29,39 +33,81 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
   const poller = useRef<Poller | null>(null);
   const bridgeRef = useRef<Bridge | null>(null);
   const taskRef = useRef<string | null>(null);
-  const listRef = useRef<ListPayload | null>(null);
   const backTo = useRef<{ scrollY: number; taskId: string } | null>(null);
-  // Generations: a response is applied only if nothing newer started after it was asked for.
-  // `nav` moves on every view change (open, back, a host result); `query` on every list request
-  // and every list result from the host, so a stale page or filter answer is dropped.
-  const nav = useRef(0);
-  const query = useRef(0);
+  const gens = useRef(new Generations()).current;
+  const deleted = useRef(new Set<string>()).current;
+  // The tag the current poll session runs under: poll results from an older view are dropped.
+  const pollTag = useRef<Tag>(gens.tag());
+  // The task on screen right now (null on the list or the deleted note): answers are tied to it.
+  const shownTask = useRef<string | null>(null);
   // Remounts the list view when the host sends a fresh list (resets its menus and spinners).
   const [listEpoch, setListEpoch] = useState(0);
-  listRef.current = list;
+
+  /** Rows of deleted tasks never come back, whichever response carries them. */
+  const clean = (l: ListPayload): ListPayload => {
+    const items = l.items.filter((i) => !deleted.has(i.task_id));
+    const gone = l.items.length - items.length;
+    return gone ? { ...l, items, total: Math.max(0, l.total - gone), shown: Math.max(0, l.shown - gone) } : l;
+  };
+  const setList = (next: ListPayload | ((prev: ListPayload | null) => ListPayload | null)) =>
+    setListState((prev) => {
+      const v = typeof next === 'function' ? next(prev) : next;
+      return v ? clean(v) : v;
+    });
+
+  const startPoll = (p: TaskPayload) => {
+    pollTag.current = gens.tag();
+    poller.current?.start(p);
+  };
+  const stopPoll = () => poller.current?.stop();
 
   useEffect(() => {
     const bridge = makeBridge();
     bridgeRef.current = bridge;
+    // The poller's own reads go through the same guard: a fetch or get_task that settles after
+    // the card moved on is reported as nothing new.
+    const guardedBridge: Bridge = {
+      ...bridge,
+      getTask: async (id, after) => {
+        const r = await gens.run(() => bridge.getTask(id, after), pollTag.current);
+        return r.stale ? null : r.value;
+      },
+    };
+    const guardedFetch: typeof fetch = async (...a) => {
+      const r = await gens.run(() => fetch(...a), pollTag.current);
+      return r.stale ? ({ status: 409, ok: false, json: async () => null } as unknown as Response) : r.value;
+    };
     // Poller.start merges each payload into the previous one (state.merge), keeps the
     // transport for the same task and resets it for a new task_id; restarting is safe.
     const p = new Poller({
-      bridge,
+      bridge: guardedBridge,
+      fetchImpl: guardedFetch,
       onUpdate: (next) => {
+        if (!gens.current(pollTag.current)) return;
+        if (deleted.has(next.task_id)) {
+          p.stop();
+          setMode((m) => ({ kind: 'deleted', fromList: m.kind !== 'list' && m.fromList }));
+          return;
+        }
         taskRef.current = next.task_id;
         setPayload(next);
       },
     });
     poller.current = p;
     bridge.onPayload((next) => {
-      nav.current++;
+      gens.bumpView();
       setTheme(bridge.theme());
+      if (deleted.has(next.task_id)) {
+        p.stop();
+        setMode({ kind: 'deleted', fromList: false });
+        return;
+      }
       setMode({ kind: 'task', fromList: false });
-      p.start(next);
+      startPoll(next);
     });
     bridge.onList((next) => {
-      nav.current++;
-      query.current++;
+      gens.bumpView();
+      gens.bumpQuery();
       setTheme(bridge.theme());
       p.stop();
       setListEpoch((e) => e + 1);
@@ -99,13 +145,17 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
   const answer: AnswerApi = useMemo(
     () => ({
       enabled: canAnswer,
-      async send(askId: string, answers: Answers): Promise<AnswerOutcome> {
+      async send(askId: string, answers: Answers): Promise<AnswerOutcome | Stale> {
         const b = bridgeRef.current;
         const taskId = taskRef.current;
         if (!b || !taskId) return { kind: 'failed', message: 'Reply in the chat to answer.' };
+        // Answers are judged by task, not by the view generation: a host result for the same task
+        // (the model re-reading it, a reconnect) bumps the view but must not drop this answer.
+        // Stale only when the card no longer shows this task, or it was deleted.
         const out = await b.answer(taskId, askId, answers);
+        if (shownTask.current !== taskId || deleted.has(taskId)) return STALE;
         // The answer result carries the task's fresh state: fold it in and keep polling.
-        if (out.kind !== 'failed' && out.payload && out.payload.task_id === taskId) poller.current?.start(out.payload);
+        if (out.kind !== 'failed' && out.payload && out.payload.task_id === taskId && !deleted.has(taskId)) startPoll(out.payload);
         return out;
       },
     }),
@@ -118,70 +168,78 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
       async query(q: ListQuery, append: boolean): Promise<string | null> {
         const b = bridgeRef.current;
         if (!b) return LIST_FAILED;
-        const gen = ++query.current;
-        const asked = listRef.current;
-        const out = await b.listTasks(q);
-        // Superseded by a newer request or a new list from the host: drop it silently.
-        if (gen !== query.current) return null;
+        gens.bumpQuery();
+        const r = await gens.run(() => b.listTasks(q));
+        // Superseded by a newer request, a navigation or a new list from the host: drop it silently.
+        if (r.stale) return null;
+        const out = r.value;
         if (out.kind === 'failed') return out.message;
-        setList((prev) => {
-          if (!append) return { ...out.list, org: out.list.org ?? prev?.org ?? null };
-          // A page belongs to the list it was asked for: same filters, and that list is still shown.
-          if (!prev || (prev !== asked && !sameFilters(prev, asked))) return prev;
-          return appendPage(prev, out.list);
-        });
+        setList((prev) => (append && prev ? appendPage(prev, out.list) : { ...out.list, org: out.list.org ?? prev?.org ?? null }));
         return null;
       },
       async open(taskId: string): Promise<string | null> {
         const b = bridgeRef.current;
         if (!b) return OPEN_FAILED;
-        const gen = ++nav.current;
-        let p: TaskPayload | null = null;
+        if (deleted.has(taskId)) return TASK_DELETED;
+        gens.bumpView();
+        let r: Guarded<TaskPayload | null>;
         try {
-          p = await b.getTask(taskId, 0);
+          r = await gens.run(() => b.getTask(taskId, 0));
         } catch {
-          p = null;
+          r = { stale: false, value: null };
         }
         // The user opened another task, went back, or the host showed something else meanwhile.
-        if (gen !== nav.current) return null;
+        if (r.stale) return null;
+        if (deleted.has(taskId)) return TASK_DELETED;
+        const p = r.value;
         if (!p || p.task_id !== taskId) return OPEN_FAILED;
         backTo.current = { scrollY: typeof window.scrollY === 'number' ? window.scrollY : 0, taskId };
         setMode({ kind: 'task', fromList: true });
-        poller.current?.start(p);
+        startPoll(p);
         return null;
       },
-      async remove(taskId: string): Promise<DeleteOutcome> {
+      async remove(taskId: string): Promise<DeleteOutcome | Stale> {
         const b = bridgeRef.current;
         if (!b) return { kind: 'failed', message: "Couldn't delete the task. Try again." };
-        const out = await b.deleteTask(taskId);
-        if (out.kind === 'deleted') {
-          // Functional: applied to whatever the list is now (another delete or a refresh may have landed).
-          setList((prev) =>
-            prev && prev.items.some((i) => i.task_id === taskId)
-              ? {
-                  ...prev,
-                  items: prev.items.filter((i) => i.task_id !== taskId),
-                  total: Math.max(0, prev.total - 1),
-                  shown: Math.max(0, prev.shown - 1),
-                }
-              : prev,
-          );
+        const r = await gens.run(() => b.deleteTask(taskId));
+        // A deletion is a fact whenever it lands: remember it (even when stale), so no later list,
+        // detail or poll result brings the task back. setList re-applies the filter to the rows.
+        if (r.value.kind === 'deleted') {
+          deleted.add(taskId);
+          setList((prev) => prev);
         }
-        return out;
+        // The outcome is local to the row: a failure is shown even if a filter change or page load
+        // happened meanwhile (the row is still on screen); a stale success removes the row as usual.
+        return r.value;
       },
     }),
     [canAnswer],
   );
 
   const back = () => {
-    nav.current++;
-    poller.current?.stop();
+    gens.bumpView();
+    stopPoll();
     setMode({ kind: 'list' });
   };
 
+  shownTask.current = mode.kind === 'task' && payload ? payload.task_id : null;
   if (mode.kind === 'list' && list) return <TaskList key={listEpoch} list={list} theme={theme} actions={actions} />;
+  if (mode.kind === 'deleted') {
+    return (
+      <article class="fc-card" data-theme={theme} aria-label="Frontier task">
+        {mode.fromList && list ? (
+          <div class="fc-backbar">
+            <button type="button" class="fc-back" onClick={back}>All tasks</button>
+          </div>
+        ) : null}
+        <p class="fc-note fc-deleted" role="status">{TASK_DELETED}</p>
+      </article>
+    );
+  }
   if (payload && mode.kind === 'task') {
-    return <Card payload={payload} theme={theme} answer={answer} onBack={mode.fromList && list ? back : undefined} />;
+    return (
+      <Card key={payload.task_id} payload={payload} theme={theme} answer={answer} onBack={mode.fromList && list ? back : undefined} />
+    );
   }
   if (connectFailed) {
     return (

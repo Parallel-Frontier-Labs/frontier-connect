@@ -151,7 +151,9 @@ describe('TaskList', () => {
     fireEvent.click(getByRole('menuitem', { name: /Delete/ }));
     const dlg = getByRole('alertdialog');
     expect(dlg.textContent).toContain('Delete "Okafor quarterly review"?');
-    getByText("This removes it and its files for everyone. This can't be undone.");
+    getByText("This removes the task and its files. Its usage stays in Observe. This can't be undone.");
+    const copy = `${dlg.querySelector('.fc-confirm-h')!.textContent} ${dlg.querySelector('.fc-confirm-d')!.textContent}`;
+    expect(copy).toBe(`Delete "Okafor quarterly review"? This removes the task and its files. Its usage stays in Observe. This can't be undone.`);
     expect(document.activeElement).toBe(getByRole('button', { name: 'Cancel' }));
     fireEvent.click(getByRole('button', { name: 'Cancel' }));
     expect(queryByRole('alertdialog')).toBeNull();

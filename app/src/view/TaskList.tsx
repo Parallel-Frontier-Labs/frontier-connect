@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { DeleteOutcome, ListQuery } from '../bridge';
+import type { DeleteOutcome, ListQuery, Stale } from '../bridge';
 import { formatWork } from '../format';
 import {
   DAYS, isLive, LIST_CAP, LIST_STATUS_LABEL, LIST_STATUSES, SOURCE_LABEL, SOURCES,
@@ -57,7 +57,7 @@ export interface ListActions {
   enabled: boolean;
   query(q: ListQuery, append: boolean): Promise<string | null>;
   open(taskId: string): Promise<string | null>;
-  remove(taskId: string): Promise<DeleteOutcome>;
+  remove(taskId: string): Promise<DeleteOutcome | Stale>;
 }
 
 function Row({
@@ -93,6 +93,11 @@ function Row({
     setBusy(true);
     setError(null);
     const out = await actions.remove(item.task_id);
+    // The card moved on meanwhile: show nothing (a deletion that landed is still filtered out).
+    if (out.kind === 'stale') {
+      setBusy(false);
+      return;
+    }
     if (out.kind === 'deleted') {
       onDeleted(item);
       return;
@@ -127,7 +132,7 @@ function Row({
         </div>
         <div class="fc-confirm" role="alertdialog" aria-labelledby={`del-h-${item.task_id}`} aria-describedby={`del-d-${item.task_id}`}>
           <div id={`del-h-${item.task_id}`} class="fc-confirm-h">{`Delete "${item.title}"?`}</div>
-          <div id={`del-d-${item.task_id}`} class="fc-confirm-d">This removes it and its files for everyone. This can't be undone.</div>
+          <div id={`del-d-${item.task_id}`} class="fc-confirm-d">This removes the task and its files. Its usage stays in Observe. This can't be undone.</div>
           <div class="fc-confirm-b">
             <button type="button" class="fc-danger" disabled={busy} onClick={() => void confirmDelete()}>
               {busy ? 'Deleting…' : 'Delete'}
@@ -211,6 +216,7 @@ export function TaskList({
   const [menu, setMenu] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
   const [loading, setLoading] = useState<'filter' | 'more' | null>(null);
+  const [moreFailed, setMoreFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [said, setSaid] = useState<string>('');
   const headRef = useRef<HTMLDivElement>(null);
@@ -231,10 +237,15 @@ export function TaskList({
     setError(null);
     setMenu(null);
     setConfirm(null);
+    if (append) setMoreFailed(false);
     const err = await actions.query(q, append);
     setLoading(null);
-    if (err) setError(err);
+    // A failed page (Show more, or the refill after deleting the visible rows) offers a retry with
+    // the same cursor; a failed filter change shows its message.
+    if (err && append) setMoreFailed(true);
+    else if (err) setError(err);
   };
+  const more = () => void run({ days: f.days, status: f.status, source: f.source, cursor: list.next_cursor }, true);
   const refilter = (change: Partial<ListQuery>) =>
     void run({ days: f.days, status: f.status, source: f.source, ...change }, false);
 
@@ -293,13 +304,17 @@ export function TaskList({
         </p>
       )}
       {error ? <p class="fc-err fc-list-err" role="alert">{error}</p> : null}
-      {list.items.length || !actions.enabled ? (
+      {list.items.length || !actions.enabled || (list.next_cursor && !list.capped) ? (
         <div class="fc-lfoot">
           {list.capped ? (
             <span class="fc-muted fc-capped">{`Showing ${Math.min(list.shown, LIST_CAP)} of ${list.total}. Narrow the dates or filters to see more.`}</span>
+          ) : actions.enabled && list.next_cursor && moreFailed && !loading ? (
+            <span class="fc-more-failed" role="alert">
+              <span class="fc-err">Couldn't load more.</span>
+              <button type="button" class="fc-toggle" onClick={more}>Retry</button>
+            </span>
           ) : actions.enabled && list.next_cursor ? (
-            <button type="button" class="fc-toggle" disabled={!!loading}
-              onClick={() => void run({ days: f.days, status: f.status, source: f.source, cursor: list.next_cursor }, true)}>
+            <button type="button" class="fc-toggle" disabled={!!loading} onClick={more}>
               {loading === 'more' ? 'Loading…' : 'Show more'}
               {loading === 'more' ? null : <Chevron />}
             </button>

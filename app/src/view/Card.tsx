@@ -1,5 +1,5 @@
 import { useRef, useState } from 'preact/hooks';
-import type { AnswerOutcome, Answers } from '../bridge';
+import type { AnswerOutcome, Answers, Stale } from '../bridge';
 import type { Status, TaskPayload } from '../types';
 import { AnsweredView, type Answered } from './Answered';
 import { Done } from './Done';
@@ -16,7 +16,7 @@ import { QuestionAsk } from './Ask';
 /** How the card answers: through the host's app tool call, when the host offers one. */
 export interface AnswerApi {
   enabled: boolean;
-  send(askId: string, answers: Answers): Promise<AnswerOutcome>;
+  send(askId: string, answers: Answers): Promise<AnswerOutcome | Stale>;
 }
 
 const NO_ANSWERS: AnswerApi = { enabled: false, send: async () => ({ kind: 'failed', message: '' }) };

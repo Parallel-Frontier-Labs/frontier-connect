@@ -1,12 +1,12 @@
 import { useRef, useState } from 'preact/hooks';
-import type { AnswerOutcome, Answers } from '../bridge';
+import type { AnswerOutcome, Answers, Stale } from '../bridge';
 import type { Answered } from './Answered';
 
 export const ALREADY_ANSWERED = 'Already answered.';
 
 export interface SendProps {
   canSend: boolean;
-  send: (answers: Answers) => Promise<AnswerOutcome>;
+  send: (answers: Answers) => Promise<AnswerOutcome | Stale>;
   onSent: (a: Omit<Answered, 'progress'>) => void;
 }
 
@@ -25,6 +25,13 @@ export function useSend({ send, onSent }: Pick<SendProps, 'send' | 'onSent'>, as
     setBusy(true);
     setError(null);
     const out = await send(answers);
+    // The card moved on to another task before the answer came back: nothing to show, but never
+    // leave the form locked on "Sending…" (harmless if this view is already gone).
+    if (out.kind === 'stale') {
+      inFlight.current = false;
+      setBusy(false);
+      return;
+    }
     if (out.kind === 'accepted') {
       onSent({ ...sent, askId });
       return;

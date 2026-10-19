@@ -10,6 +10,9 @@ export type AnswerOutcome =
   | { kind: 'refused'; reason: string; payload: TaskPayload | null }
   | { kind: 'failed'; message: string };
 
+/** A result dropped because the card moved on (another view, task or query) before it arrived. */
+export type Stale = { kind: 'stale' };
+
 export interface ListQuery { days: number; status?: ListStatus | null; source?: Source | null; cursor?: string | null }
 export type ListOutcome = { kind: 'ok'; list: ListPayload } | { kind: 'failed'; message: string };
 export type DeleteOutcome = { kind: 'deleted' } | { kind: 'refused'; reason: string } | { kind: 'failed'; message: string };
