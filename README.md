@@ -68,11 +68,18 @@ can find and use them by name.
 |---|---|
 | `frontier_list_playbooks` | Lists your organization's playbooks and the skills inside them. |
 | `frontier_request_upload` | Returns upload links so the assistant can hand files to a task. |
-| `frontier_start_task` | Starts a task and returns the live task card. |
+| `frontier_start_task` | Starts a new task and returns the live task card. Only for separate, new work. |
+| `frontier_continue_task` | Continues the chat's existing task with a follow-up (same files, history and record). The default for any follow-up. |
 | `frontier_wait_task` | Waits for the next update (a step, a question, files ready, done). |
 | `frontier_get_task` | Returns the current state of a task. |
 | `frontier_list_tasks` | Lists your recent tasks. |
 | `frontier_stop_task` | Stops a running task. |
+| `frontier_answer` | Sends the user's answer to a task's question or form. The task card uses it too. |
+| `frontier_steer` | Gives a running task new guidance from the user. |
+
+One chat, one Frontier task: follow-ups in a chat continue the task already started there
+(`frontier_continue_task`), a running task takes new direction through `frontier_steer`, and a new
+task starts only when the user asks for separate work. See [AGENTS.md](AGENTS.md#how-to-run-a-task).
 
 ## Privacy and control
 
@@ -88,7 +95,9 @@ can find and use them by name.
 
 This repository holds the open-source **task card**, the
 [MCP App](https://modelcontextprotocol.io) that renders a Frontier task inside the chat. It is a
-small Preact app built into a single self-contained HTML file with no external scripts.
+small Preact app built into a single self-contained HTML file with no external scripts or fonts.
+It follows the chat app's light or dark theme, and lets the user answer a task's questions and
+forms in place.
 
 The Frontier MCP server and agents are hosted by Parallel Frontier Labs; they are not in this
 repository.
@@ -110,6 +119,9 @@ See [SECURITY.md](SECURITY.md).
 ## License
 
 Apache-2.0, see [LICENSE](LICENSE).
+
+The built card embeds the Public Sans and IBM Plex Mono fonts under the SIL Open Font License 1.1;
+see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Frontier and the Frontier logo are trademarks of Parallel Frontier Labs. The license does not grant
 rights to use them.

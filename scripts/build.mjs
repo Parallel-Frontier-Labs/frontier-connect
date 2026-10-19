@@ -63,8 +63,28 @@ const js = await build({
 });
 const css = await build({ ...common, entryPoints: ['app/src/card.css'] });
 
+// Fonts are embedded so the card makes no external request: Public Sans 400/600/700 and IBM Plex
+// Mono 400, latin subset, woff2, from the @fontsource packages. They are under the SIL Open Font
+// License 1.1, which every copy must carry: LICENSES/OFL-1.1.txt (the copyright lines and the
+// license text, verbatim) is written in full into a comment next to the faces.
+const FONTS = [
+  ['Public Sans', 400, '@fontsource/public-sans/files/public-sans-latin-400-normal.woff2'],
+  ['Public Sans', 600, '@fontsource/public-sans/files/public-sans-latin-600-normal.woff2'],
+  ['Public Sans', 700, '@fontsource/public-sans/files/public-sans-latin-700-normal.woff2'],
+  ['IBM Plex Mono', 400, '@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-400-normal.woff2'],
+];
+// The latin subset's range, as @fontsource publishes it.
+const LATIN =
+  'U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD';
+const fontCss =
+  `/*!\nFonts: Public Sans and IBM Plex Mono.\n\n${readFileSync(join(root, 'LICENSES/OFL-1.1.txt'), 'utf8').replaceAll('*/', '* /')}*/` +
+  FONTS.map(([family, weight, file]) => {
+    const b64 = readFileSync(join(root, 'node_modules', file)).toString('base64');
+    return `@font-face{font-family:'${family}';font-style:normal;font-weight:${weight};font-display:swap;src:url(data:font/woff2;base64,${b64}) format('woff2');unicode-range:${LATIN}}`;
+  }).join('');
+
 const jsText = js.outputFiles[0].text.replace(/<\/script/gi, '<\\/script');
-const cssText = css.outputFiles[0].text.replace(/<\/style/gi, '<\\/style');
+const cssText = (fontCss + css.outputFiles[0].text).replace(/<\/style/gi, '<\\/style');
 const html = readFileSync(join(root, 'app/index.html'), 'utf8')
   .replace('<!--CSS-->', () => `<style>${cssText}</style>`)
   .replace('<!--JS-->', () => `<script>${jsText}</script>`);
@@ -75,4 +95,4 @@ const out = join(root, 'dist/task-card.html');
 const tmp = `${out}.${process.pid}.tmp`;
 writeFileSync(tmp, html);
 renameSync(tmp, out);
-console.log(`dist/task-card.html ${Buffer.byteLength(html)} bytes`);
+console.log(`dist/task-card.html ${Buffer.byteLength(html)} bytes (embedded fonts ${Buffer.byteLength(fontCss)} bytes)`);

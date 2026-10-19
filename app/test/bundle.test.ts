@@ -19,7 +19,7 @@ const view = { token: 'tok', expires_in_s: 3600, url: 'https://view.invalid/v1/r
 // Runs the built file (dist/task-card.html, built once by the vitest globalSetup) against a
 // scripted host. This catches build-time trimming that would break the SDK at runtime, including
 // callServerTool response parsing, which is the one path that could reach a stubbed zod part.
-function host(onToolsCall: (msg: { id: number; params: unknown }, reply: (m: object) => void) => void) {
+function host(onToolsCall: (msg: { id: number; params: unknown }, reply: (m: object) => void) => void, hostCapabilities: object = {}) {
   const html = readFileSync('dist/task-card.html', 'utf8');
   const methods: string[] = [];
   const toolCalls: unknown[] = [];
@@ -52,7 +52,7 @@ function host(onToolsCall: (msg: { id: number; params: unknown }, reply: (m: obj
             result: {
               protocolVersion: '2026-01-26',
               hostInfo: { name: 'test-host', version: '1' },
-              hostCapabilities: {},
+              hostCapabilities,
               hostContext: { theme: 'dark' },
             },
           });
@@ -92,6 +92,9 @@ describe('built card in a scripted host', () => {
     await wait(50);
     expect(h.text()).toContain('Quarterly review');
     expect(h.w.document.documentElement.dataset.theme).toBe('dark');
+    // autoResize: the card reports its size to the host so the host can fit the frame.
+    await until(() => h.methods.includes('ui/notifications/size-changed'), 2000);
+    expect(h.methods).toContain('ui/notifications/size-changed');
     assertQuiet(h);
     h.w.close();
   }, 60000);
@@ -125,6 +128,45 @@ describe('built card in a scripted host', () => {
     await wait(200);
     expect(h.text()).toContain('Quarterly review');
     expect(h.text()).not.toContain('Loading the task');
+    assertQuiet(h);
+    h.w.close();
+  }, 60000);
+
+  it('answers a question from the card through frontier_answer when the host forwards app tool calls', async () => {
+    const h = host((m, reply) => {
+      const p = m.params as { name: string };
+      if (p.name === 'frontier_answer') {
+        reply({ result: { content: [{ type: 'text', text: 'Sent to Frontier.' }], structuredContent: { ...base, status: 'running', title: 'Carrying on', accepted: true } } });
+      }
+    }, { serverTools: {} });
+    await wait(50);
+    h.send({
+      ...base, status: 'waiting_for_answer',
+      open_ask: { ask_id: 'ask_0123456789abcdef0123', kind: 'question', questions: [{ id: 'q', kind: 'confirm', prompt: 'Go ahead?' }] },
+    });
+    await until(() => h.text().includes('Send answer'));
+    const doc = h.w.document;
+    const yes = [...doc.querySelectorAll('label')].find((l: any) => l.textContent === 'Yes') as any;
+    yes.click();
+    await wait(20);
+    (doc.querySelector('button[type="submit"]') as any).click();
+    await until(() => h.text().includes('Answered'));
+    expect(h.toolCalls.find((c: any) => c.name === 'frontier_answer')).toMatchObject({
+      name: 'frontier_answer',
+      arguments: { task_id: 't1', ask_id: 'ask_0123456789abcdef0123', answers: [{ questionId: 'q', kind: 'confirm', value: true }] },
+    });
+    expect(h.text()).toContain('Carrying on');
+    assertQuiet(h);
+    h.w.close();
+  }, 60000);
+
+  it('without the serverTools capability the built card says to reply in the chat', async () => {
+    const h = host(() => {});
+    await wait(50);
+    h.send({ ...base, status: 'waiting_for_answer', open_ask: { ask_id: 'ask_x', kind: 'question', questions: [{ id: 'q', kind: 'confirm', prompt: 'Go ahead?' }] } });
+    await wait(100);
+    expect(h.text()).toContain('Reply in the chat to answer.');
+    expect(h.text()).not.toContain('Send answer');
     assertQuiet(h);
     h.w.close();
   }, 60000);

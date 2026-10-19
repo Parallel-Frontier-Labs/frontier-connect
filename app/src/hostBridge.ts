@@ -1,22 +1,40 @@
 import { App } from '@modelcontextprotocol/ext-apps';
-import type { Bridge } from './bridge';
+import type { AnswerOutcome, Bridge } from './bridge';
 import { parsePayload, type TaskPayload } from './types';
+
+export const SEND_FAILED = "Couldn't send your answer. Try again, or reply in the chat.";
+
+/** A short, plain message from an error tool result, or the generic line. */
+function errorLine(r: { structuredContent?: unknown; content?: unknown } | undefined): string {
+  const sc = r?.structuredContent as { error?: { message?: unknown } } | undefined;
+  const msg = sc && typeof sc === 'object' && sc.error && typeof sc.error === 'object' ? sc.error.message : undefined;
+  if (typeof msg === 'string' && msg.trim()) return msg.trim().slice(0, 300);
+  return SEND_FAILED;
+}
 
 /**
  * Adapter over the MCP Apps `App` class (@modelcontextprotocol/ext-apps 2.0.3).
- * Verified API: `new App(appInfo, capabilities?, options?)`, `app.ontoolresult = (params) => ...`
- * (`params.structuredContent`), `app.connect(transport?)` (defaults to a postMessage transport to
- * the parent window), `app.callServerTool({ name, arguments })` -> CallToolResult,
+ * Verified API: `new App(appInfo, capabilities?, options?)` (`options.autoResize`, default true,
+ * reports the document's size to the host through `ui/notifications/size-changed` whenever it
+ * changes), `app.ontoolresult = (params) => ...` (`params.structuredContent`), `app.connect(transport?)`
+ * (defaults to a postMessage transport to the parent window), `app.callServerTool({ name, arguments })`
+ * -> CallToolResult, `app.getHostCapabilities()?.serverTools` (the host proxies app tool calls),
  * `app.getHostContext()?.theme`, `app.onhostcontextchanged`.
  */
 export function createHostBridge(
-  app: App = new App({ name: 'frontier-task', version: '0.1.0' }),
+  app: App = new App({ name: 'frontier-task', version: '0.2.0' }, {}, { autoResize: true }),
 ): Bridge {
   const listeners: ((p: TaskPayload) => void)[] = [];
+  // The host can deliver the first tool result before the card registers its listener; keep the
+  // latest one and replay it on registration so the card renders at once, not after a poll.
+  let latest: TaskPayload | null = null;
   // Handlers must be set before connect() so the first tool result is not missed.
   app.ontoolresult = (result: { structuredContent?: unknown }) => {
     const sc = parsePayload(result?.structuredContent);
-    if (sc) for (const l of listeners) l(sc);
+    if (sc) {
+      latest = sc;
+      for (const l of listeners) l(sc);
+    }
   };
   const themeOf = (ctx?: { theme?: string } | null): 'light' | 'dark' =>
     ctx?.theme === 'dark' ? 'dark' : 'light';
@@ -27,16 +45,24 @@ export function createHostBridge(
     for (const l of themeListeners) l(t);
   };
   const errorListeners: ((e: unknown) => void)[] = [];
+  const readyListeners: (() => void)[] = [];
   let connectError: { e: unknown } | null = null;
-  void Promise.resolve(app.connect()).catch((e: unknown) => {
-    // Not inside a host (or the handshake failed): the card shows a connect error.
-    console.warn('[frontier-task] host connection failed', e);
-    connectError = { e };
-    for (const l of errorListeners) l(e);
-  });
+  let ready = false;
+  void Promise.resolve(app.connect())
+    .then(() => {
+      ready = true;
+      for (const l of readyListeners) l();
+    })
+    .catch((e: unknown) => {
+      // Not inside a host (or the handshake failed): the card shows a connect error.
+      console.warn('[frontier-task] host connection failed', e);
+      connectError = { e };
+      for (const l of errorListeners) l(e);
+    });
   return {
     onPayload: (cb) => {
       listeners.push(cb);
+      if (latest) cb(latest);
     },
     async getTask(taskId, after) {
       const r = await app.callServerTool({
@@ -52,6 +78,31 @@ export function createHostBridge(
     onConnectError: (cb) => {
       errorListeners.push(cb);
       if (connectError) cb(connectError.e);
+    },
+    canCallTools: () => ready && !!app.getHostCapabilities?.()?.serverTools,
+    onReady: (cb) => {
+      readyListeners.push(cb);
+      if (ready) cb();
+    },
+    async answer(taskId, askId, answers): Promise<AnswerOutcome> {
+      let r: Awaited<ReturnType<App['callServerTool']>> | undefined;
+      try {
+        r = await app.callServerTool({
+          name: 'frontier_answer',
+          arguments: { task_id: taskId, ask_id: askId, answers },
+        });
+      } catch {
+        return { kind: 'failed', message: SEND_FAILED };
+      }
+      if (!r || r.isError) return { kind: 'failed', message: errorLine(r) };
+      const payload = parsePayload(r.structuredContent);
+      const sc = r.structuredContent as { accepted?: unknown; reason?: unknown } | undefined;
+      if (sc?.accepted === false) {
+        const reason = typeof sc.reason === 'string' && sc.reason.trim() ? sc.reason.trim().slice(0, 300) : SEND_FAILED;
+        return { kind: 'refused', reason, payload };
+      }
+      if (sc?.accepted === true) return { kind: 'accepted', payload };
+      return { kind: 'failed', message: SEND_FAILED };
     },
   };
 }

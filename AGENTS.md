@@ -30,19 +30,34 @@ Hand over the whole task, in the user's words, rather than splitting it into pie
 
 ## How to run a task
 
+**One chat, one Frontier task.** Every follow-up continues the task already started in this chat
+(`frontier_continue_task`); while it runs, use `frontier_steer`; for a question or form,
+`frontier_answer`. Start a new task only when the user explicitly asks for separate work. If
+unsure, continue. In a new chat where the user refers to earlier work, find that task with
+`frontier_list_tasks` and continue it.
+
 1. **Files first.** Call `frontier_request_upload`, then PUT each file to its `put_url`.
-2. **Start.** Call `frontier_start_task` with the user's request, the uploaded file names, and
-   any playbook skills as `playbook/skill`. Set `may_ask` to true if the user is around to answer
-   questions.
+2. **Start.** Call `frontier_start_task` with the user's request, the uploaded file names (and
+   `upload_id` set to the `task_id` the upload returned), and any playbook skills as
+   `playbook/skill`. Set `may_ask` to true if the user is around to answer questions.
 3. **Keep the task card visible.** It updates live.
 4. **Follow.** Call `frontier_wait_task` with the returned cursor. Tell the user about notable
    updates: a new step, a question, files ready, done.
-5. **Questions.** If Frontier asks something, answer only when you are sure from what the user
-   already told you. Otherwise ask the user. Never fill in a form the user should own.
-6. **Done.** Point the user to the deliverables by name.
+5. **Questions and forms.** The user can answer right in the task card. Call `frontier_answer`
+   only when the user has clearly told you what to choose, with the `ask_id` from the task and
+   their answer. Otherwise ask the user. Never fill in a form the user should own: the card lets
+   them answer it. If the result says `accepted: false`, relay its one-line reason.
+6. **Steering.** If the user wants to change a running task (skip a section, change focus), call
+   `frontier_steer` with their words. Do not start a new task for it.
+7. **Done.** Point the user to the deliverables by name.
 
-To continue a finished task, call `frontier_start_task` again with its `task_id` and the new
-instruction. To cancel, call `frontier_stop_task`.
+8. **Follow-ups.** When the user asks for more (a change, an extra section, another file), call
+   `frontier_continue_task` with the chat's `task_id` and their words. It keeps the same files,
+   history and record; the card shows "Follow-up · turn N". New files for it go through
+   `frontier_request_upload` with that `task_id`. If the task is still running, the result says
+   `accepted: false`: use `frontier_steer` instead.
+
+To cancel, call `frontier_stop_task`.
 
 ## Rules
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { merge } from '../src/state';
+import { KEEP_EVENTS, merge } from '../src/state';
 import type { TaskPayload } from '../src/types';
 
 const base: TaskPayload = { task_id: 't', status: 'running', title: 'T', plan: [], sections: [], live: null, estimate: null,
@@ -18,5 +18,14 @@ describe('merge', () => {
     const v = { token: 'new', expires_in_s: 10, url: 'u' };
     expect(merge(base, { ...base, view: v }).view?.token).toBe('new');
     expect(merge(null, base)).toBe(base);
+  });
+
+  it('accumulates paged events by seq, oldest first, capped', () => {
+    const ev = (seq: number) => ({ seq, kind: 'narration', text: `e${seq}` });
+    const a = merge({ ...base, events: [ev(1), ev(2)] }, { ...base, events: [ev(2), ev(3)] });
+    expect(a.events.map((e) => e.seq)).toEqual([1, 2, 3]);
+    const many = merge({ ...base, events: Array.from({ length: 50 }, (_, i) => ev(i)) }, { ...base, events: Array.from({ length: 50 }, (_, i) => ev(i + 50)) });
+    expect(many.events.length).toBe(KEEP_EVENTS);
+    expect(many.events.at(-1)!.seq).toBe(99);
   });
 });

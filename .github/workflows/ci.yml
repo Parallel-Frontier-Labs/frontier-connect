@@ -34,10 +34,11 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
-      - run: npm audit --omit=dev --audit-level=high
+      - name: Audit every dependency, dev tools included (fail on high or critical)
+        run: npm audit --audit-level=high
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      - run: test $(wc -c < dist/task-card.html) -le 307200
+      - run: test $(wc -c < dist/task-card.html) -le 460800
       - name: Scan the built card for secrets
         run: gitleaks dir dist --redact --no-banner

@@ -16,7 +16,10 @@ function rig(fetchImpl: (...a: unknown[]) => Promise<Response>, getTask: Bridge[
   const timers: { fn: () => void; ms: number; id: number }[] = [];
   let id = 0;
   let t = startAt;
-  const bridge: Bridge = { onPayload: () => {}, getTask: vi.fn(getTask), theme: () => 'light', onThemeChange: () => {}, onConnectError: () => {} };
+  const bridge: Bridge = {
+    onPayload: () => {}, getTask: vi.fn(getTask), theme: () => 'light', onThemeChange: () => {}, onConnectError: () => {},
+    canCallTools: () => false, onReady: () => {}, answer: async () => ({ kind: 'failed', message: '' }),
+  };
   const updates: TaskPayload[] = [];
   const poller = new Poller({
     bridge, fetchImpl: fetchImpl as unknown as typeof fetch, now: () => t,
