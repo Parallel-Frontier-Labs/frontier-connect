@@ -1,0 +1,14 @@
+{
+  "name": "parallel-frontier",
+  "owner": { "name": "Parallel Frontier Labs", "url": "https://parallelfrontier.io" },
+  "metadata": {
+    "description": "Frontier by Parallel Frontier Labs: delegate work on your files and folders to Frontier's agents."
+  },
+  "plugins": [
+    {
+      "name": "frontier",
+      "source": "./plugin",
+      "description": "Delegate multi-step work on your files to Frontier's agents and get the finished files back into your folder."
+    }
+  ]
+}

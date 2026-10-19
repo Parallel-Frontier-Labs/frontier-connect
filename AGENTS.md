@@ -36,7 +36,9 @@ Hand over the whole task, in the user's words, rather than splitting it into pie
 unsure, continue. In a new chat where the user refers to earlier work, find that task with
 `frontier_list_tasks` and continue it.
 
-1. **Files first.** Call `frontier_request_upload`, then PUT each file to its `put_url`.
+1. **Files first.** With the Frontier plugin, follow its `frontier` skill: it uploads a whole
+   folder through one ticket and saves delivered files back with `frontier_request_download`.
+   Without it, call `frontier_request_upload` with `files`, then PUT each file to its `put_url`.
 2. **Start.** Call `frontier_start_task` with the user's request, the uploaded file names (and
    `upload_id` set to the `task_id` the upload returned), and any playbook skills as
    `playbook/skill`. Set `may_ask` to true if the user is around to answer questions.
