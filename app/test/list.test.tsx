@@ -221,6 +221,13 @@ describe('TaskList', () => {
     const { container } = render(<TaskList list={mkList()} theme="dark" actions={acts()} />);
     expect(container.querySelector('.fc-card')!.getAttribute('data-theme')).toBe('dark');
   });
+
+  it('is embedded in the host frame by default; draws its own frame only when told', () => {
+    const { container, rerender } = render(<TaskList list={mkList()} actions={acts()} />);
+    expect(container.querySelector('article')!.className).toBe('fc-card fc-card--embedded');
+    rerender(<TaskList list={mkList()} embedded={false} actions={acts()} />);
+    expect(container.querySelector('article')!.className).toBe('fc-card');
+  });
 });
 
 describe('TaskList row menu placement', () => {

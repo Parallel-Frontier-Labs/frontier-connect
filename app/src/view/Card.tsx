@@ -1,5 +1,6 @@
 import { useRef, useState } from 'preact/hooks';
 import type { AnswerOutcome, Answers, Stale } from '../bridge';
+import { cardClass } from '../format';
 import type { Status, TaskPayload } from '../types';
 import { AnsweredView, type Answered } from './Answered';
 import { Done } from './Done';
@@ -68,12 +69,15 @@ function Pill({ status }: { status: Status }) {
 export function Card({
   payload: p,
   theme = 'light',
+  embedded = true,
   answer = NO_ANSWERS,
   download,
   onBack,
 }: {
   payload: TaskPayload;
   theme?: 'light' | 'dark';
+  /** Inside the host's own frame: no outer border, radius or shadow (see cardClass). */
+  embedded?: boolean;
   answer?: AnswerApi;
   /** Download buttons for the delivered files (hosts that forward the card's tool calls). */
   download?: DownloadApi;
@@ -153,7 +157,7 @@ export function Card({
   }
 
   return (
-    <article class="fc-card" data-theme={theme} aria-label={`Frontier task: ${p.title || 'Frontier task'}`}>
+    <article class={cardClass(embedded)} data-theme={theme} aria-label={`Frontier task: ${p.title || 'Frontier task'}`}>
       {onBack ? (
         <div class="fc-backbar">
           <button type="button" class="fc-back" onClick={onBack}>

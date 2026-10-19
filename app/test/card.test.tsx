@@ -41,6 +41,13 @@ describe('header', () => {
     expect(container.querySelector('.fc-card')!.getAttribute('data-theme')).toBe('dark');
   });
 
+  it('is embedded in the host frame by default; draws its own frame only when told', () => {
+    const { container, rerender } = render(<Card payload={mk({ status: 'done' })} />);
+    expect(container.querySelector('article')!.className).toBe('fc-card fc-card--embedded');
+    rerender(<Card payload={mk({ status: 'done' })} embedded={false} />);
+    expect(container.querySelector('article')!.className).toBe('fc-card');
+  });
+
   it('a follow-up turn shows "Follow-up · turn N" in the header line', () => {
     const { container } = render(<Card payload={mk({ org: 'Halcyon North', turn: 2 })} />);
     expect(container.querySelector('.fc-org')!.textContent).toBe('Halcyon North · Follow-up · turn 2');

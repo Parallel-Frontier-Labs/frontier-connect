@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { AnswerOutcome, Answers, Bridge, DeleteOutcome, DownloadOutcome, ListQuery, Stale } from './bridge';
+import { cardClass } from './format';
 import { Generations, type Guarded, type Tag } from './generation';
 import { createHostBridge, LINK_FAILED, LIST_FAILED } from './hostBridge';
 import { appendPage, type ListPayload } from './list';
@@ -43,6 +44,7 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
   const [list, setListState] = useState<ListPayload | null>(null);
   const [mode, setMode] = useState<Mode>({ kind: 'task', fromList: false });
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const [embedded, setEmbedded] = useState(true);
   const [connectFailed, setConnectFailed] = useState(false);
   const [canAnswer, setCanAnswer] = useState(false);
   const poller = useRef<Poller | null>(null);
@@ -130,12 +132,16 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
       setMode({ kind: 'list' });
     });
     bridge.onThemeChange(setTheme);
+    const frame = () => setEmbedded(bridge.embedded ? bridge.embedded() : true);
+    bridge.onEmbeddedChange?.(setEmbedded);
     bridge.onConnectError(() => setConnectFailed(true));
     bridge.onReady(() => {
       setTheme(bridge.theme());
+      frame();
       setCanAnswer(bridge.canCallTools());
     });
     setTheme(bridge.theme());
+    frame();
     return () => p.stop();
   }, []);
 
@@ -263,10 +269,10 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
   };
 
   shownTask.current = mode.kind === 'task' && payload ? payload.task_id : null;
-  if (mode.kind === 'list' && list) return <TaskList key={listEpoch} list={list} theme={theme} actions={actions} />;
+  if (mode.kind === 'list' && list) return <TaskList key={listEpoch} list={list} theme={theme} embedded={embedded} actions={actions} />;
   if (mode.kind === 'deleted') {
     return (
-      <article class="fc-card" data-theme={theme} aria-label="Frontier task">
+      <article class={cardClass(embedded)} data-theme={theme} aria-label="Frontier task">
         {mode.fromList && list ? (
           <div class="fc-backbar">
             <button type="button" class="fc-back" onClick={back}>All tasks</button>
@@ -278,7 +284,7 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
   }
   if (payload && mode.kind === 'task') {
     return (
-      <Card key={payload.task_id} payload={payload} theme={theme} answer={answer} download={download}
+      <Card key={payload.task_id} payload={payload} theme={theme} embedded={embedded} answer={answer} download={download}
         onBack={mode.fromList && list ? back : undefined} />
     );
   }

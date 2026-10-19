@@ -69,6 +69,30 @@ describe('createHostBridge', () => {
     expect(b.theme()).toBe('light');
   });
 
+  it('embedded: inside the host frame unless the host says fullscreen', () => {
+    const app = fake();
+    const b = createHostBridge(app);
+    expect(b.embedded!()).toBe(true); // no displayMode
+    app.getHostContext.mockReturnValue(undefined);
+    expect(b.embedded!()).toBe(true);
+    for (const [displayMode, want] of [['inline', true], ['pip', true], ['fullscreen', false]] as const) {
+      app.getHostContext.mockReturnValue({ displayMode });
+      expect(b.embedded!()).toBe(want);
+    }
+  });
+
+  it('onEmbeddedChange follows displayMode changes only', () => {
+    const app = fake();
+    const b = createHostBridge(app);
+    const seen: boolean[] = [];
+    b.onEmbeddedChange!((e) => seen.push(e));
+    const fire = (app as unknown as { onhostcontextchanged: (p: unknown) => void }).onhostcontextchanged;
+    fire({ displayMode: 'fullscreen' });
+    fire({ theme: 'dark' }); // no displayMode in the delta: no frame change
+    fire({ displayMode: 'inline' });
+    expect(seen).toEqual([false, true]);
+  });
+
   it('survives a failed connect', async () => {
     const app = fake({ connect: vi.fn().mockRejectedValue(new Error('no host')) });
     expect(() => createHostBridge(app)).not.toThrow();

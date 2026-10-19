@@ -29,6 +29,12 @@ export interface Bridge {
   theme(): 'light' | 'dark';
   /** The host changed its theme (light/dark toggle) while the card is open. */
   onThemeChange(cb: (t: 'light' | 'dark') => void): void;
+  /** True while the host shows the card inside its own frame (every display mode but fullscreen,
+   * and whenever the host does not say): the card then draws no outer border, radius or shadow,
+   * so the frame is not doubled. Optional: a bridge without it counts as embedded. */
+  embedded?(): boolean;
+  /** The host changed its display mode (inline, pip, fullscreen) while the card is open. */
+  onEmbeddedChange?(cb: (embedded: boolean) => void): void;
   /** The host handshake failed (not inside a host, or it refused). Fires at most once, even if registered late. */
   onConnectError(cb: (e: unknown) => void): void;
   /** True once the host said it forwards the card's own tool calls (answers from the card). */

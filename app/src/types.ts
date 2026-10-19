@@ -33,6 +33,9 @@ export interface Deliverable { name: string; path: string }
 export interface Skill { playbook: string; skill: string }
 /** A digest event, reduced to what the card reads: narration/activity lines and the end reason. */
 export interface TaskEvent { seq: number; kind: string; text: string; code?: string }
+/** Where the plugin's helper saved the delivered files: a folder name and an ISO time. */
+export interface Saved { dir: string; at: string }
+
 export interface TaskPayload {
   task_id: string; status: Status; title: string; plan: PlanStep[]; sections: Section[]; live: string | null;
   estimate: { eta_s: number } | null; open_ask: OpenAsk | null; deliverables: Deliverable[];
@@ -46,6 +49,9 @@ export interface TaskPayload {
   source?: Source | null;
   /** Playbook skills the run used (terminal states only). */
   skills?: Skill[];
+  /** The delivered files were saved to the user's computer by the Frontier plugin's helper, into
+   * the folder named `dir` (a folder name, never a path); null when not, or not for this turn. */
+  saved?: Saved | null;
   /** Set on frontier_answer / frontier_steer / frontier_continue_task results only. */
   accepted?: boolean;
   reason?: string | null;
@@ -197,6 +203,14 @@ function cleanEvents(v: unknown): TaskEvent[] {
     });
 }
 
+/** `saved` only with a non-empty folder name (one segment, capped) and a time string. */
+function cleanSaved(v: unknown): Saved | null {
+  const o = obj(v);
+  const dir = o ? str(o.dir, 80).trim() : '';
+  if (!o || !dir || /[/\\]/.test(dir) || typeof o.at !== 'string') return null;
+  return { dir, at: o.at.slice(0, 40) };
+}
+
 /** Validate and sanitise an untrusted payload; null when it is not a task payload at all. */
 export function parsePayload(v: unknown): TaskPayload | null {
   if (!isPayload(v)) return null;
@@ -250,6 +264,7 @@ export function parsePayload(v: unknown): TaskPayload | null {
     skills: list(r.skills, 20)
       .map((s) => ({ playbook: str(s.playbook, 80), skill: str(s.skill, 80) }))
       .filter((s) => s.playbook !== '' || s.skill !== ''),
+    saved: cleanSaved(r.saved),
   };
   if (typeof r.accepted === 'boolean') out.accepted = r.accepted;
   if (typeof r.reason === 'string') out.reason = r.reason.slice(0, 300);

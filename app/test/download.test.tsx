@@ -5,7 +5,7 @@ import type { Bridge, LinkOutcome } from '../src/bridge';
 import { Generations } from '../src/generation';
 import { createHostBridge, LINK_FAILED } from '../src/hostBridge';
 import { OPEN_LINK_WAIT_MS, Root } from '../src/Root';
-import type { TaskPayload } from '../src/types';
+import { parsePayload, type TaskPayload } from '../src/types';
 
 afterEach(cleanup);
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -188,6 +188,59 @@ function fakeApp(over: Record<string, unknown> = {}) {
     ...over,
   } as unknown as App & { callServerTool: ReturnType<typeof vi.fn>; openLink: ReturnType<typeof vi.fn> };
 }
+
+const saved = (id = 't1', dir = 'Review t1') =>
+  ({ ...done(id), saved: { dir, at: '2026-10-19T17:00:00+00:00' } }) as unknown as TaskPayload;
+
+describe('saved to your folder', () => {
+  it('without `saved` the box is unchanged: the workspace line and the zip button', () => {
+    rig();
+    screen.getByText("In this task's workspace");
+    screen.getByRole('button', { name: 'Download folder (.zip)' });
+    expect(screen.queryByText(/Saved to your folder/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Download again (.zip)' })).toBeNull();
+  });
+
+  it('with `saved` the main line names the folder and the zip becomes a small Download again link', async () => {
+    const r = rig();
+    r.payload(saved());
+    const title = screen.getByText(/Saved to your folder ·/);
+    expect(title.textContent).toBe('Saved to your folder · Review t1');
+    expect(title.closest('.fc-loc')?.querySelector('.fc-loc-icon svg')).not.toBeNull();
+    expect(screen.queryByText("In this task's workspace")).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Download folder (.zip)' })).toBeNull();
+    const again = screen.getByRole('button', { name: 'Download again (.zip)' });
+    expect(again.classList.contains('fc-toggle')).toBe(true);
+    expect(again.classList.contains('fc-secondary')).toBe(false);
+    // Per-file download icons stay.
+    screen.getByRole('button', { name: 'Download summary.md' });
+    screen.getByRole('button', { name: 'Download q1.xlsx' });
+    fireEvent.click(again);
+    expect(r.bridge.fileLink).toHaveBeenCalledWith('t1', null);
+    expect(again.textContent).toBe('Preparing…');
+    await act(async () => { r.links[0]!.d.resolve(ok()); await tick(); });
+    expect(r.bridge.openLink).toHaveBeenCalledWith(URL1);
+    expect(again.textContent).toBe('Download again (.zip)');
+  });
+
+  it('with `saved` and no tool calls, the box says saved and offers no download hint', () => {
+    const r = rig(false);
+    r.payload(saved());
+    expect(screen.getByText(/Saved to your folder ·/).textContent).toBe('Saved to your folder · Review t1');
+    expect(screen.queryByText('Open in Frontier to download')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Download/ })).toBeNull();
+  });
+
+  it('parsePayload keeps a folder name and time, and drops anything else', () => {
+    const base = { ...done(), saved: undefined } as Record<string, unknown>;
+    expect(parsePayload({ ...base, saved: { dir: 'Q3 report', at: '2026-10-19T17:00:00Z' } })?.saved)
+      .toEqual({ dir: 'Q3 report', at: '2026-10-19T17:00:00Z' });
+    expect(parsePayload(base)?.saved).toBeNull();
+    for (const bad of [null, 'x', { dir: '' }, { dir: 'a/b', at: 'x' }, { dir: 'C:\\a', at: 'x' }, { dir: 'ok' }, { dir: 7, at: 'x' }])
+      expect(parsePayload({ ...base, saved: bad })?.saved).toBeNull();
+    expect(parsePayload({ ...base, saved: { dir: 'x'.repeat(200), at: 'x' } })?.saved?.dir).toHaveLength(80);
+  });
+});
 
 describe('host bridge file links', () => {
   it('calls frontier_file_link with the path, or without one for the folder', async () => {

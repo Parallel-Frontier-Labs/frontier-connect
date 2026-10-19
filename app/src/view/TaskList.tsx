@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { DeleteOutcome, ListQuery, Stale } from '../bridge';
-import { formatWork } from '../format';
+import { cardClass, formatWork } from '../format';
 import {
   DAYS, isLive, LIST_CAP, LIST_STATUS_LABEL, LIST_STATUSES, SOURCE_LABEL, SOURCES,
   type ListItem, type ListPayload, type ListStatus, type Source,
@@ -255,9 +255,9 @@ function FilterSelect<T extends string | number>({
 
 /** "Your Frontier tasks": filters, rows with an inline delete confirm, Show more. */
 export function TaskList({
-  list, theme = 'light', actions, announce,
+  list, theme = 'light', embedded = true, actions, announce,
 }: {
-  list: ListPayload; theme?: 'light' | 'dark'; actions: ListActions; announce?: string;
+  list: ListPayload; theme?: 'light' | 'dark'; embedded?: boolean; actions: ListActions; announce?: string;
 }) {
   const [menu, setMenu] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
@@ -316,7 +316,7 @@ export function TaskList({
   const live = said || announce || `${list.items.length} of ${list.total} tasks shown.`;
 
   return (
-    <article class="fc-card" data-theme={theme} aria-label="Your Frontier tasks">
+    <article class={cardClass(embedded)} data-theme={theme} aria-label="Your Frontier tasks">
       <header class="fc-head fc-head-list">
         <Mark />
         <div class="fc-heading" ref={headRef} tabIndex={-1}>

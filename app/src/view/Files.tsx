@@ -2,8 +2,8 @@ import { useMemo, useRef, useState } from 'preact/hooks';
 import type { DownloadOutcome, Stale } from '../bridge';
 import { LINK_FAILED } from '../hostBridge';
 import { allDirs, buildDelivery, findFile, firstFile, type TreeNode } from '../tree';
-import type { Deliverable } from '../types';
-import { CloudIcon, DownloadIcon, FolderIcon, TreeChevron } from './icons';
+import type { Deliverable, Saved } from '../types';
+import { CloudIcon, DownloadIcon, FolderIcon, TickIcon, TreeChevron } from './icons';
 
 const EXT_TONE: Record<string, string> = {
   pdf: 'red', xlsx: 'green', xls: 'green', csv: 'green', tsv: 'green', docx: 'navy', doc: 'navy', pptx: 'amber', html: 'navy',
@@ -71,8 +71,10 @@ function useDownloads(api: DownloadApi) {
  * a download button and the folder a "Download folder (.zip)" button (the host opens the link).
  * A plain nested list of buttons (folders toggle with aria-expanded, the selected file has
  * aria-current): no tree role, since the rows are ordinary tab stops.
+ * When the Frontier plugin's helper has saved the files to the user's computer (`saved`), the box
+ * says so ("Saved to your folder · <dir>") and the zip becomes a small "Download again (.zip)" link.
  */
-export function DeliveredFiles({ files, download = NO_DOWNLOADS }: { files: Deliverable[]; download?: DownloadApi }) {
+export function DeliveredFiles({ files, download = NO_DOWNLOADS, saved = null }: { files: Deliverable[]; download?: DownloadApi; saved?: Saved | null }) {
   const d = useMemo(() => buildDelivery(files), [files]);
   const dirs = useMemo(() => allDirs(d.nodes), [d]);
   const [open, setOpen] = useState<Set<string> | null>(null);
@@ -91,33 +93,54 @@ export function DeliveredFiles({ files, download = NO_DOWNLOADS }: { files: Deli
   const note = dl.note;
   return (
     <section class="fc-files" aria-label="Files">
-      <div class="fc-loc">
-        <span class="fc-loc-icon"><CloudIcon /></span>
-        <div class="fc-loc-text">
-          <div class="fc-loc-title">In this task's workspace</div>
-          <div class="fc-mono fc-loc-path">
-            <span>Workspace</span>
-            <Sep />
-            {d.root ? (
-              <>
-                <span class="fc-loc-root">{d.root}/</span>
-                <span class="fc-chip-new">NEW FOLDER</span>
-              </>
-            ) : (
+      {saved ? (
+        <div class="fc-loc fc-loc-saved">
+          <span class="fc-loc-icon"><TickIcon /></span>
+          <div class="fc-loc-text">
+            <div class="fc-loc-title fc-loc-savedtitle" title={saved.dir}>
+              {'Saved to your folder · '}
+              <span class="fc-strong-ink">{saved.dir}</span>
+            </div>
+            <div class="fc-mono fc-loc-path">
               <span class="fc-loc-root">{plural(d.fileCount, 'file')}</span>
-            )}
+            </div>
           </div>
+          {download.enabled ? (
+            <button type="button" class="fc-toggle fc-dlagain" aria-disabled={folderBusy ? 'true' : undefined}
+              aria-busy={folderBusy ? 'true' : undefined} onClick={() => void dl.run(null, 'the folder')}>
+              {folderBusy ? 'Preparing…' : 'Download again (.zip)'}
+            </button>
+          ) : null}
         </div>
-        {download.enabled ? (
-          <button type="button" class="fc-secondary fc-secondary-sm fc-dlall" aria-disabled={folderBusy ? 'true' : undefined}
-            aria-busy={folderBusy ? 'true' : undefined} onClick={() => void dl.run(null, 'the folder')}>
-            <DownloadIcon />
-            {folderBusy ? 'Preparing…' : 'Download folder (.zip)'}
-          </button>
-        ) : (
-          <span class="fc-loc-hint"><DownloadIcon />Open in Frontier to download</span>
-        )}
-      </div>
+      ) : (
+        <div class="fc-loc">
+          <span class="fc-loc-icon"><CloudIcon /></span>
+          <div class="fc-loc-text">
+            <div class="fc-loc-title">In this task's workspace</div>
+            <div class="fc-mono fc-loc-path">
+              <span>Workspace</span>
+              <Sep />
+              {d.root ? (
+                <>
+                  <span class="fc-loc-root">{d.root}/</span>
+                  <span class="fc-chip-new">NEW FOLDER</span>
+                </>
+              ) : (
+                <span class="fc-loc-root">{plural(d.fileCount, 'file')}</span>
+              )}
+            </div>
+          </div>
+          {download.enabled ? (
+            <button type="button" class="fc-secondary fc-secondary-sm fc-dlall" aria-disabled={folderBusy ? 'true' : undefined}
+              aria-busy={folderBusy ? 'true' : undefined} onClick={() => void dl.run(null, 'the folder')}>
+              <DownloadIcon />
+              {folderBusy ? 'Preparing…' : 'Download folder (.zip)'}
+            </button>
+          ) : (
+            <span class="fc-loc-hint"><DownloadIcon />Open in Frontier to download</span>
+          )}
+        </div>
+      )}
       {note ? (
         note.kind === 'failed' ? (
           <p class="fc-dlnote" role="alert">

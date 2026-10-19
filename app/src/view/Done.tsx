@@ -14,7 +14,7 @@ export function Done({ payload: p, download }: { payload: TaskPayload; download?
       {result?.takeaway ? <p class="fc-takeaway">{result.takeaway}</p> : null}
       {result?.summary ? <Summary text={result.summary} type={result.summary_type} /> : null}
       {!result?.takeaway && !result?.summary ? <p class="fc-note">Finished.</p> : null}
-      {p.deliverables.length ? <DeliveredFiles files={p.deliverables} download={download} /> : null}
+      {p.deliverables.length ? <DeliveredFiles files={p.deliverables} download={download} saved={p.saved} /> : null}
       {steps.length ? (
         <details class="fc-stepsd">
           <summary>

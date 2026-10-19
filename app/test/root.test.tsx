@@ -54,6 +54,28 @@ describe('Root', () => {
     expect(document.documentElement.dataset.theme).toBe('dark');
   });
 
+  it('marks the card embedded from the bridge and follows display mode changes', () => {
+    const r = rig();
+    let frame = true;
+    let onFrame: (e: boolean) => void = () => {};
+    r.bridge.embedded = () => frame;
+    r.bridge.onEmbeddedChange = (cb) => (onFrame = cb);
+    const { container } = render(<Root makeBridge={() => r.bridge} />);
+    act(() => r.payload(done));
+    expect(container.querySelector('article')!.className).toBe('fc-card fc-card--embedded');
+    act(() => ((frame = false), onFrame(false)));
+    expect(container.querySelector('article')!.className).toBe('fc-card');
+    act(() => ((frame = true), onFrame(true)));
+    expect(container.querySelector('article')!.className).toBe('fc-card fc-card--embedded');
+  });
+
+  it('a bridge without embedded() counts as embedded', () => {
+    const r = rig();
+    const { container } = render(<Root makeBridge={() => r.bridge} />);
+    act(() => r.payload(done));
+    expect(container.querySelector('article')!.className).toBe('fc-card fc-card--embedded');
+  });
+
   it('shows a connect error instead of loading forever', () => {
     const r = rig();
     render(<Root makeBridge={() => r.bridge} />);

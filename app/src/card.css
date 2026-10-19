@@ -99,6 +99,9 @@ button:disabled { cursor: default; }
 .fc-loading { margin: 0; padding: 16px; font: 14px/1.5 var(--sans); color: var(--muted); }
 
 .fc-card { background: var(--card); color: var(--fg); font: 14px/1.5 var(--sans); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); overflow: hidden; max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
+/* Inside the host's own rounded, bordered frame (Codex, ChatGPT, Claude inline): the frame is the
+   card's edge, so a second border, radius and shadow would only double it. Inner hairlines stay. */
+.fc-card--embedded { border: 0; border-radius: 0; box-shadow: none; }
 .fc-mono { font-family: var(--mono); }
 .fc-strong { font-weight: 600; color: var(--fg); }
 .fc-strong-ink { color: var(--fg); }
@@ -306,6 +309,9 @@ button:disabled { cursor: default; }
 .fc-loc-root { color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .fc-sep { padding: 0 6px; color: var(--rule); }
 .fc-chip-new { margin-left: 8px; flex: none; border-radius: 3px; background: var(--ok-bg); color: var(--ok-ink); padding: 1px 4px; font-size: 9.5px; letter-spacing: 0.06em; }
+.fc-loc-savedtitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fc-dlagain { flex: none; padding: 2px 0; font-size: 12px; font-weight: 500; color: var(--faint-ink); }
+.fc-dlagain[aria-disabled='true'] { cursor: progress; }
 .fc-loc-hint { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--faint-ink); }
 .fc-files-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 2px; }
 .fc-tbtns { display: inline-flex; align-items: center; gap: 8px; }

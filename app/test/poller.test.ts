@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Poller } from '../src/poller';
+import { Poller, SAVED_BACKOFF_MS } from '../src/poller';
 import type { Bridge } from '../src/bridge';
 import type { TaskPayload } from '../src/types';
 
@@ -262,6 +262,91 @@ describe('Poller', () => {
       await r.fire();
       expect(r.timers.length).toBe(1);
       expect(r.timers[0].ms).toBe(3000);
+    });
+  });
+
+  describe('waiting for "saved to your folder"', () => {
+    const files = [{ name: 'a.md', path: 'a.md' }];
+    const done = (o: Partial<TaskPayload> = {}) => mk({ status: 'done', deliverables: files, ...o });
+    const saved = { dir: 'Q3 report', at: '2026-10-19T17:00:00Z' };
+
+    it('a finished task with files and no saved keeps reading on the backoff and flips to saved', async () => {
+      const replies = [done({ cursor: 3 }), done({ cursor: 3, saved })];
+      const f = vi.fn(async () => resp(200, replies.shift()));
+      const r = rig(f);
+      r.poller.start(done());
+      expect(r.timers.map((t) => t.ms)).toEqual([5000]);
+      await r.fire();
+      expect(r.updates.at(-1)?.saved ?? null).toBeNull();
+      expect(r.timers.map((t) => t.ms)).toEqual([10_000]);
+      await r.fire();
+      expect(r.updates.at(-1)?.saved).toEqual(saved);
+      expect(r.timers.length).toBe(0);
+      expect(f).toHaveBeenCalledTimes(2);
+    });
+
+    it('a live turn that finishes without saved starts the wait', async () => {
+      const r = rig(async () => resp(200, done({ cursor: 4 })));
+      r.poller.start(mk());
+      await r.fire();
+      expect(r.timers.map((t) => t.ms)).toEqual([5000]);
+    });
+
+    it('stops after the cap (about 3 minutes in all)', async () => {
+      const f = vi.fn(async () => resp(200, done()));
+      const r = rig(f);
+      r.poller.start(done());
+      const waits: number[] = [];
+      while (r.timers.length) {
+        waits.push(r.timers[0].ms);
+        await r.fire();
+      }
+      expect(waits).toEqual([...SAVED_BACKOFF_MS]);
+      expect(waits.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(180_000);
+      expect(f).toHaveBeenCalledTimes(SAVED_BACKOFF_MS.length);
+    });
+
+    it('does not wait when saved is already there, or there are no files', () => {
+      for (const p of [done({ saved }), mk({ status: 'done', deliverables: [] }), mk({ status: 'stopped' })]) {
+        const r = rig(async () => resp(200, p));
+        r.poller.start(p);
+        expect(r.timers.length).toBe(0);
+      }
+    });
+
+    it('a newer turn ends the wait: still running goes back to the live poll, finished stops', async () => {
+      const r = rig(async () => resp(200, mk({ status: 'running', turn: 2 })));
+      r.poller.start(done());
+      await r.fire();
+      expect(r.timers.map((t) => t.ms)).toEqual([1000]);
+      const r2 = rig(async () => resp(200, done({ turn: 2 })));
+      r2.poller.start(done());
+      await r2.fire();
+      expect(r2.timers.length).toBe(0);
+    });
+
+    it('another task, or stop(), ends the wait at once', async () => {
+      const r = rig(async () => resp(200, done()));
+      r.poller.start(done());
+      r.poller.start(mk({ task_id: 'other', status: 'done', deliverables: [], view: undefined }));
+      expect(r.timers.length).toBe(0);
+      r.poller.start(done());
+      r.poller.stop();
+      expect(r.timers.length).toBe(0);
+    });
+
+    it('a hidden card reads nothing but the wait still counts', async () => {
+      const f = vi.fn(async () => resp(200, done()));
+      const r = rig(f);
+      const spy = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+      try {
+        r.poller.start(done());
+        await r.fire();
+        expect(f).not.toHaveBeenCalled();
+        expect(r.timers.map((t) => t.ms)).toEqual([10_000]);
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 });

@@ -12,6 +12,14 @@ export interface PollerOptions {
 }
 
 const REFRESH_WINDOW_MS = 120_000;
+/** After a finished task with files and no `saved`, the card keeps reading it a little longer so
+ * the plugin helper's "saved to your folder" acknowledgement shows up: these waits, 3 min in all. */
+export const SAVED_BACKOFF_MS: readonly number[] = [5000, 10_000, 20_000, 30_000, 30_000, 30_000, 30_000, 25_000];
+
+/** Finished, delivered files, and not (yet) saved to the user's folder. */
+const awaitsSaved = (p: TaskPayload) => TERMINAL.has(p.status) && p.deliverables.length > 0 && !p.saved;
+
+const hidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
 
 export class Poller {
   mode: 'direct' | 'bridge' = 'direct';
@@ -20,6 +28,9 @@ export class Poller {
   private timer: unknown = null;
   private running = false;
   private gen = 0;
+  /** Index into SAVED_BACKOFF_MS while waiting for `saved` on a finished turn; -1 otherwise. */
+  private settle = -1;
+  private settleTurn = 1;
   private bridge: Bridge;
   private fetchImpl: typeof fetch;
   private now: () => number;
@@ -49,10 +60,12 @@ export class Poller {
     }
     this.accept(p);
     if (!TERMINAL.has(p.status)) this.schedule();
+    else this.beginSettle();
   }
 
   stop(): void {
     this.running = false;
+    this.settle = -1;
     this.gen++;
     if (this.timer !== null) this.clearTimer(this.timer);
     this.timer = null;
@@ -63,7 +76,18 @@ export class Poller {
     return s === 'waiting_for_answer' || s === 'waiting_for_you';
   }
 
+  /** A finished turn whose files may still be saved by the plugin helper: read it again on the
+   * backoff. Otherwise there is nothing more to read. */
+  private beginSettle(): void {
+    const p = this.payload;
+    if (!p || !awaitsSaved(p)) return this.stop();
+    this.settle = 0;
+    this.settleTurn = p.turn ?? 1;
+    this.schedule();
+  }
+
   private interval(): number {
+    if (this.settle >= 0) return SAVED_BACKOFF_MS[this.settle];
     if (this.waiting()) return 5000;
     return this.mode === 'direct' ? 1000 : 3000;
   }
@@ -124,7 +148,9 @@ export class Poller {
   private async tick(): Promise<void> {
     const gen = this.gen;
     if (!this.running || !this.payload) return;
-    if (TERMINAL.has(this.payload.status)) return this.stop();
+    const settling = this.settle >= 0;
+    if (!settling && TERMINAL.has(this.payload.status)) return this.stop();
+    if (settling && hidden()) return this.afterSettleRead(); // the wait still counts toward the cap
 
     let refreshed = false;
     if (this.expiresAt - this.now() < REFRESH_WINDOW_MS) {
@@ -149,7 +175,23 @@ export class Poller {
       if (gen !== this.gen) return;
     }
 
-    if (this.payload && TERMINAL.has(this.payload.status)) return this.stop();
+    if (settling) return this.afterSettleRead();
+    if (this.payload && TERMINAL.has(this.payload.status)) return this.beginSettle();
+    this.schedule();
+  }
+
+  /** One read of the saved wait done: stop once `saved` arrived, a newer turn started or the
+   * waits ran out; otherwise wait the next, longer step. A newer turn that is still running goes
+   * back to the live poll. */
+  private afterSettleRead(): void {
+    const p = this.payload;
+    if (p && !TERMINAL.has(p.status)) {
+      this.settle = -1;
+      return this.schedule();
+    }
+    if (!p || !awaitsSaved(p) || (p.turn ?? 1) !== this.settleTurn) return this.stop();
+    this.settle++;
+    if (this.settle >= SAVED_BACKOFF_MS.length) return this.stop();
     this.schedule();
   }
 }

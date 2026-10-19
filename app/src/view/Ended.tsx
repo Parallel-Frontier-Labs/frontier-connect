@@ -83,7 +83,7 @@ export function Ended({ payload: p, download }: { payload: TaskPayload; download
         <p class="fc-reason">{`Stopped${after}.${p.deliverables.length ? '' : ' Nothing was delivered.'}`}</p>
       )}
       <Steps list={list} foldAfterFailure={failed} />
-      {p.deliverables.length ? <DeliveredFiles files={p.deliverables} download={download} /> : null}
+      {p.deliverables.length ? <DeliveredFiles files={p.deliverables} download={download} saved={p.saved} /> : null}
       <div class="fc-muted fc-next">{failed ? 'Ask in the chat to try again.' : 'Ask in the chat to start it again.'}</div>
     </div>
   );

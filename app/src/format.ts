@@ -16,3 +16,9 @@ export function formatEta(etaS: number): string {
   if (etaS < 45) return 'Less than a minute left';
   return `About ${Math.max(1, Math.round(etaS / 60))} min left`;
 }
+
+/** The task card's root class: `fc-card--embedded` drops its own outer border, radius and shadow
+ * while the host's frame is already drawn around it, so the edges are not doubled. */
+export function cardClass(embedded: boolean): string {
+  return embedded ? 'fc-card fc-card--embedded' : 'fc-card';
+}

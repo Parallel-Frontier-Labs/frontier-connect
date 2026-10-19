@@ -92,9 +92,33 @@ describe('built card in a scripted host', () => {
     await wait(50);
     expect(h.text()).toContain('Quarterly review');
     expect(h.w.document.documentElement.dataset.theme).toBe('dark');
+    // No displayMode in the host context: inline inside the host's frame, so no second border.
+    expect(h.w.document.querySelector('.fc-card')!.className).toBe('fc-card fc-card--embedded');
     // autoResize: the card reports its size to the host so the host can fit the frame.
     await until(() => h.methods.includes('ui/notifications/size-changed'), 2000);
     expect(h.methods).toContain('ui/notifications/size-changed');
+    assertQuiet(h);
+    h.w.close();
+  }, 60000);
+
+  it('ships the embedded rule and keeps its own frame only while the host shows it fullscreen', async () => {
+    const h = host(() => {});
+    await wait(50);
+    h.send({ ...base, status: 'done' });
+    await wait(50);
+    const card = () => h.w.document.querySelector('.fc-card')!;
+    const css = [...h.w.document.querySelectorAll('style')].map((s) => s.textContent).join('');
+    expect(css).toMatch(/\.fc-card--embedded\{border:0;border-radius:0;box-shadow:none\}/);
+    const mode = (displayMode: string) =>
+      h.w.dispatchEvent(new h.w.MessageEvent('message', {
+        source: h.w, data: { jsonrpc: '2.0', method: 'ui/notifications/host-context-changed', params: { displayMode } },
+      }));
+    mode('fullscreen');
+    await wait(50);
+    expect(card().className).toBe('fc-card');
+    mode('inline');
+    await wait(50);
+    expect(card().className).toBe('fc-card fc-card--embedded');
     assertQuiet(h);
     h.w.close();
   }, 60000);

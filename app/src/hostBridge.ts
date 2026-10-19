@@ -64,10 +64,19 @@ export function createHostBridge(
   const themeOf = (ctx?: { theme?: string } | null): 'light' | 'dark' =>
     ctx?.theme === 'dark' ? 'dark' : 'light';
   const themeListeners: ((t: 'light' | 'dark') => void)[] = [];
-  app.onhostcontextchanged = (params: { theme?: string }) => {
+  // MCP Apps hosts (Codex, ChatGPT, Claude) draw their own rounded, bordered frame around an
+  // inline or pip view, and the host context has no "frame" hint; only fullscreen fills a bare
+  // panel. So the card is embedded unless the host says fullscreen.
+  const embeddedOf = (ctx?: { displayMode?: unknown } | null): boolean => ctx?.displayMode !== 'fullscreen';
+  const embeddedListeners: ((e: boolean) => void)[] = [];
+  app.onhostcontextchanged = (params: { theme?: string; displayMode?: unknown }) => {
     // The notification carries only the changed fields; fall back to the merged context.
     const t = params && 'theme' in params ? themeOf(params) : themeOf(app.getHostContext?.());
     for (const l of themeListeners) l(t);
+    if (params && 'displayMode' in params) {
+      const e = embeddedOf(params);
+      for (const l of embeddedListeners) l(e);
+    }
   };
   const errorListeners: ((e: unknown) => void)[] = [];
   const readyListeners: (() => void)[] = [];
@@ -99,6 +108,10 @@ export function createHostBridge(
     theme: () => themeOf(app.getHostContext?.()),
     onThemeChange: (cb) => {
       themeListeners.push(cb);
+    },
+    embedded: () => embeddedOf(app.getHostContext?.()),
+    onEmbeddedChange: (cb) => {
+      embeddedListeners.push(cb);
     },
     onConnectError: (cb) => {
       errorListeners.push(cb);
