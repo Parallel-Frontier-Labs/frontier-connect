@@ -1,12 +1,23 @@
 {
   "name": "frontier",
   "displayName": "Frontier",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Hand long, multi-step work on your files to Frontier's self-optimizing agents, follow it in a live task card, and get the finished files back into your folder.",
-  "author": { "name": "Parallel Frontier Labs", "url": "https://parallelfrontier.io" },
+  "author": {
+    "name": "Parallel Frontier Labs",
+    "url": "https://parallelfrontier.io"
+  },
   "icon": "./assets/logo.png",
   "homepage": "https://parallelfrontier.io",
+  "privacyPolicyUrl": "https://parallelfrontier.io/privacy",
+  "termsOfServiceUrl": "https://parallelfrontier.io/terms",
   "repository": "https://github.com/Parallel-Frontier-Labs/frontier-connect",
   "license": "Apache-2.0",
-  "keywords": ["frontier", "agents", "delegation", "files", "mcp"]
+  "keywords": [
+    "frontier",
+    "agents",
+    "delegation",
+    "files",
+    "mcp"
+  ]
 }
