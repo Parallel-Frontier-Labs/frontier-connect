@@ -170,4 +170,28 @@ describe('built card in a scripted host', () => {
     assertQuiet(h);
     h.w.close();
   }, 60000);
+
+  it('renders a list result and re-queries frontier_list_tasks from a filter', async () => {
+    const list = (title: string) => ({
+      view: 'list', items: [{ task_id: 't9', title, status: 'done', started_at: '2026-10-18T09:00:00Z', source: 'frontier', work_ms: 1000, turn: 1 }],
+      total: 1, shown: 1, next_cursor: null, filters: { days: 7, status: null, source: null }, capped: false,
+    });
+    const h = host((m, reply) => {
+      if ((m.params as { name: string }).name === 'frontier_list_tasks') {
+        reply({ result: { content: [{ type: 'text', text: 'ok' }], structuredContent: list('Filtered task') } });
+      }
+    }, { serverTools: {} });
+    await wait(50);
+    h.send(list('First task'));
+    await until(() => h.text().includes('First task'));
+    expect(h.text()).toContain('Your Frontier tasks');
+    await until(() => !!h.w.document.querySelector('select'));
+    const sel = h.w.document.querySelectorAll('select')[1] as any;
+    sel.value = '3';
+    sel.dispatchEvent(new h.w.Event('change', { bubbles: true }));
+    await until(() => h.text().includes('Filtered task'));
+    expect(h.toolCalls.find((c: any) => c.name === 'frontier_list_tasks')).toMatchObject({ arguments: { days: 7, status: 'done' } });
+    assertQuiet(h);
+    h.w.close();
+  }, 60000);
 });

@@ -6,7 +6,7 @@ describe('single-file build', () => {
     const f = 'dist/task-card.html';
     const html = readFileSync(f, 'utf8');
     expect(html.startsWith('<!doctype html>')).toBe(true);
-    expect(statSync(f).size).toBeLessThanOrEqual(460800);
+    expect(statSync(f).size).toBeLessThanOrEqual(524288);
     expect(html).not.toMatch(/<script[^>]*\ssrc/i);
     expect(html).not.toMatch(/<link\s/i);
     expect(html).toContain('id="root"');

@@ -1,3 +1,4 @@
+import type { ListPayload, ListStatus, Source } from './list';
 import type { TaskPayload } from './types';
 
 /** The answer value frontier_answer takes: a question's Answer list or a form submission. */
@@ -8,6 +9,10 @@ export type AnswerOutcome =
   | { kind: 'accepted'; payload: TaskPayload | null }
   | { kind: 'refused'; reason: string; payload: TaskPayload | null }
   | { kind: 'failed'; message: string };
+
+export interface ListQuery { days: number; status?: ListStatus | null; source?: Source | null; cursor?: string | null }
+export type ListOutcome = { kind: 'ok'; list: ListPayload } | { kind: 'failed'; message: string };
+export type DeleteOutcome = { kind: 'deleted' } | { kind: 'refused'; reason: string } | { kind: 'failed'; message: string };
 
 export interface Bridge {
   /** Every tool result the host shows this card for (start_task, get_task, wait_task). */
@@ -25,4 +30,10 @@ export interface Bridge {
   onReady(cb: () => void): void;
   /** frontier_answer through the host. Never retried: a timeout or error is reported as failed. */
   answer(taskId: string, askId: string, answers: Answers): Promise<AnswerOutcome>;
+  /** frontier_list_tasks tool results the host shows this card for ("Your Frontier tasks"). */
+  onList(cb: (l: ListPayload) => void): void;
+  /** frontier_list_tasks from the card: a filter change or "Show more". */
+  listTasks(q: ListQuery): Promise<ListOutcome>;
+  /** frontier_delete_task (app-only): only ever called from the user's click on Delete. Never retried. */
+  deleteTask(taskId: string): Promise<DeleteOutcome>;
 }

@@ -8,6 +8,7 @@ import { FilesAsk } from './FilesAsk';
 import { Footer } from './Footer';
 import { FormAsk } from './FormAsk';
 import { Mark, Now } from './icons';
+import { SourceChip } from './TaskList';
 import { NoPlan } from './Sections';
 import { PausedSteps, PlanProgress, progressKey } from './Plan';
 import { QuestionAsk } from './Ask';
@@ -67,10 +68,13 @@ export function Card({
   payload: p,
   theme = 'light',
   answer = NO_ANSWERS,
+  onBack,
 }: {
   payload: TaskPayload;
   theme?: 'light' | 'dark';
   answer?: AnswerApi;
+  /** Opened from "Your Frontier tasks": a "← All tasks" bar returns to the list. */
+  onBack?: () => void;
 }) {
   // The last answer sent from this card. It keeps the options locked ("Answered · continuing")
   // while the task picks it up, which the engine does asynchronously.
@@ -146,6 +150,16 @@ export function Card({
 
   return (
     <article class="fc-card" data-theme={theme} aria-label={`Frontier task: ${p.title || 'Frontier task'}`}>
+      {onBack ? (
+        <div class="fc-backbar">
+          <button type="button" class="fc-back" onClick={onBack}>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M11 7H3M6.5 3.5L3 7l3.5 3.5" />
+            </svg>
+            All tasks
+          </button>
+        </div>
+      ) : null}
       <header class="fc-head">
         <Mark />
         <div class="fc-heading">
@@ -153,6 +167,7 @@ export function Card({
           <div class="fc-org">
             {p.org ? <span class="fc-org-name">{p.org}</span> : 'Frontier'}
             {followUp ? ` · Follow-up · turn ${p.turn}` : p.org ? ' · Frontier' : null}
+            {p.source ? <> · <SourceChip source={p.source} /></> : null}
           </div>
         </div>
         <Pill status={p.status} />

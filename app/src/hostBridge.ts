@@ -1,15 +1,18 @@
 import { App } from '@modelcontextprotocol/ext-apps';
-import type { AnswerOutcome, Bridge } from './bridge';
+import type { AnswerOutcome, Bridge, DeleteOutcome, ListOutcome } from './bridge';
+import { parseList, type ListPayload } from './list';
 import { parsePayload, type TaskPayload } from './types';
 
 export const SEND_FAILED = "Couldn't send your answer. Try again, or reply in the chat.";
+export const LIST_FAILED = "Couldn't load your tasks. Try again, or ask in the chat.";
+export const DELETE_FAILED = "Couldn't delete the task. Try again.";
 
 /** A short, plain message from an error tool result, or the generic line. */
-function errorLine(r: { structuredContent?: unknown; content?: unknown } | undefined): string {
+function errorLine(r: { structuredContent?: unknown; content?: unknown } | undefined, fallback = SEND_FAILED): string {
   const sc = r?.structuredContent as { error?: { message?: unknown } } | undefined;
   const msg = sc && typeof sc === 'object' && sc.error && typeof sc.error === 'object' ? sc.error.message : undefined;
   if (typeof msg === 'string' && msg.trim()) return msg.trim().slice(0, 300);
-  return SEND_FAILED;
+  return fallback;
 }
 
 /**
@@ -28,11 +31,21 @@ export function createHostBridge(
   // The host can deliver the first tool result before the card registers its listener; keep the
   // latest one and replay it on registration so the card renders at once, not after a poll.
   let latest: TaskPayload | null = null;
+  const listListeners: ((l: ListPayload) => void)[] = [];
+  let latestList: ListPayload | null = null;
   // Handlers must be set before connect() so the first tool result is not missed.
   app.ontoolresult = (result: { structuredContent?: unknown }) => {
+    const list = parseList(result?.structuredContent);
+    if (list) {
+      latestList = list;
+      latest = null;
+      for (const l of listListeners) l(list);
+      return;
+    }
     const sc = parsePayload(result?.structuredContent);
     if (sc) {
       latest = sc;
+      latestList = null;
       for (const l of listeners) l(sc);
     }
   };
@@ -83,6 +96,43 @@ export function createHostBridge(
     onReady: (cb) => {
       readyListeners.push(cb);
       if (ready) cb();
+    },
+    onList: (cb) => {
+      listListeners.push(cb);
+      if (latestList) cb(latestList);
+    },
+    async listTasks(q): Promise<ListOutcome> {
+      const args: Record<string, unknown> = { days: q.days };
+      if (q.status) args.status = q.status;
+      if (q.source) args.source = q.source;
+      if (q.cursor) args.cursor = q.cursor;
+      try {
+        const r = await app.callServerTool({ name: 'frontier_list_tasks', arguments: args });
+        if (!r || r.isError) return { kind: 'failed', message: errorLine(r, LIST_FAILED) };
+        const list = parseList(r.structuredContent);
+        return list ? { kind: 'ok', list } : { kind: 'failed', message: LIST_FAILED };
+      } catch {
+        return { kind: 'failed', message: LIST_FAILED };
+      }
+    },
+    async deleteTask(taskId): Promise<DeleteOutcome> {
+      let r: Awaited<ReturnType<App['callServerTool']>> | undefined;
+      try {
+        r = await app.callServerTool({ name: 'frontier_delete_task', arguments: { task_id: taskId } });
+      } catch {
+        return { kind: 'failed', message: DELETE_FAILED };
+      }
+      // Deleted elsewhere already (another device or a second click): the task is gone either way.
+      const code = (r?.structuredContent as { error?: { code?: unknown } } | undefined)?.error?.code;
+      if (r?.isError && code === 'task_not_found') return { kind: 'deleted' };
+      if (!r || r.isError) return { kind: 'failed', message: errorLine(r, DELETE_FAILED) };
+      const sc = r.structuredContent as { accepted?: unknown; reason?: unknown } | undefined;
+      if (sc?.accepted === true) return { kind: 'deleted' };
+      if (sc?.accepted === false) {
+        const reason = typeof sc.reason === 'string' && sc.reason.trim() ? sc.reason.trim().slice(0, 300) : DELETE_FAILED;
+        return { kind: 'refused', reason };
+      }
+      return { kind: 'failed', message: DELETE_FAILED };
     },
     async answer(taskId, askId, answers): Promise<AnswerOutcome> {
       let r: Awaited<ReturnType<App['callServerTool']>> | undefined;

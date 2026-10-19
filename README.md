@@ -69,13 +69,17 @@ can find and use them by name.
 | `frontier_list_playbooks` | Lists your organization's playbooks and the skills inside them. |
 | `frontier_request_upload` | Returns upload links so the assistant can hand files to a task. |
 | `frontier_start_task` | Starts a new task and returns the live task card. Only for separate, new work. |
-| `frontier_continue_task` | Continues the chat's existing task with a follow-up (same files, history and record). The default for any follow-up. |
+| `frontier_continue_task` | Continues the chat's existing task with a follow-up (same files, history and record). The default for any follow-up. Takes no skills: follow-ups keep the skills chosen at the start. |
 | `frontier_wait_task` | Waits for the next update (a step, a question, files ready, done). |
 | `frontier_get_task` | Returns the current state of a task. |
-| `frontier_list_tasks` | Lists your recent tasks. |
+| `frontier_list_tasks` | Lists your own recent tasks in the card: filter by dates, status and app, open one, load more. |
 | `frontier_stop_task` | Stops a running task. |
 | `frontier_answer` | Sends the user's answer to a task's question or form. The task card uses it too. |
 | `frontier_steer` | Gives a running task new guidance from the user. |
+| `frontier_delete_task` | Used only by the card, when you click Delete and confirm. Hidden from the assistant. |
+
+Deleting a task is something only you do, in the card: open the task list, choose Delete on a
+task and confirm. The assistant cannot delete tasks.
 
 One chat, one Frontier task: follow-ups in a chat continue the task already started there
 (`frontier_continue_task`), a running task takes new direction through `frontier_steer`, and a new

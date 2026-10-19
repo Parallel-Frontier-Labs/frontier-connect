@@ -328,3 +328,28 @@ describe('waiting without an ask', () => {
     getByText('Clock stops while it waits');
   });
 });
+
+describe('source chip in the header', () => {
+  const base = { task_id: 't', status: 'running', title: 'Financial Plan Summary', org: 'Halcyon North' };
+  it('shows the tinted source next to the org line; nothing when null or unknown', () => {
+    const p = parsePayload({ ...base, source: 'codex', turn: 2 })!;
+    expect(p.source).toBe('codex');
+    const { container } = render(<Card payload={p} />);
+    const org = container.querySelector('.fc-org')!;
+    expect(org.querySelector('.fc-src.fc-src-codex')!.textContent).toBe('Codex');
+    expect(org.textContent).toBe('Halcyon North · Follow-up · turn 2 · Codex');
+    cleanup();
+    for (const source of [null, 'mystery-app', { a: 1 }, undefined]) {
+      const q = parsePayload({ ...base, source })!;
+      expect(q.source).toBeNull();
+      const c = render(<Card payload={q} />);
+      expect(c.container.querySelector('.fc-src')).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('parsing twice keeps the source', () => {
+    const once = parsePayload({ ...base, source: 'frontier' })!;
+    expect(parsePayload(once)!.source).toBe('frontier');
+  });
+});

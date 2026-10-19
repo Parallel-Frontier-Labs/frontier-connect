@@ -19,6 +19,7 @@ function rig(fetchImpl: (...a: unknown[]) => Promise<Response>, getTask: Bridge[
   const bridge: Bridge = {
     onPayload: () => {}, getTask: vi.fn(getTask), theme: () => 'light', onThemeChange: () => {}, onConnectError: () => {},
     canCallTools: () => false, onReady: () => {}, answer: async () => ({ kind: 'failed', message: '' }),
+    onList: () => {}, listTasks: async () => ({ kind: 'failed', message: '' }), deleteTask: async () => ({ kind: 'failed', message: '' }),
   };
   const updates: TaskPayload[] = [];
   const poller = new Poller({

@@ -53,11 +53,22 @@ unsure, continue. In a new chat where the user refers to earlier work, find that
 
 8. **Follow-ups.** When the user asks for more (a change, an extra section, another file), call
    `frontier_continue_task` with the chat's `task_id` and their words. It keeps the same files,
-   history and record; the card shows "Follow-up · turn N". New files for it go through
+   history and record; the card shows "Follow-up · turn N". `frontier_continue_task` takes no
+   skills: follow-ups keep the skills chosen when the task started. New files for it go through
    `frontier_request_upload` with that `task_id`. If the task is still running, the result says
    `accepted: false`: use `frontier_steer` instead.
 
 To cancel, call `frontier_stop_task`.
+
+## Recent tasks and deleting
+
+- `frontier_list_tasks` shows the user's own tasks from the last few days (default 7; `days` 1 to
+  90, optional `status` and `source` filters) in the card, newest first, 10 at a time. In the card
+  the user can filter, open a task and come back with "All tasks", and load more.
+- Deleting is the user's decision, made in the card: the user clicks Delete on a task and
+  confirms. You cannot delete tasks. If the user asks to delete one, show their tasks with
+  `frontier_list_tasks` and tell them to use Delete on that task in the card. A running or waiting
+  task has to be stopped first.
 
 ## Rules
 

@@ -1,3 +1,4 @@
+import { SOURCES, type Source } from './list';
 export const STATUSES = ['starting', 'running', 'waiting_for_answer', 'waiting_for_you', 'done', 'error', 'stopped'] as const;
 export type Status = (typeof STATUSES)[number];
 export interface Section { id: string; title: string; done: boolean; outcome: string | null }
@@ -41,6 +42,8 @@ export interface TaskPayload {
   org?: string | null;
   /** Turns on the task: 1, plus one per follow-up (header line "Follow-up · turn N"). */
   turn?: number;
+  /** Where the task was started (the list's source enum); null when unknown. */
+  source?: Source | null;
   /** Playbook skills the run used (terminal states only). */
   skills?: Skill[];
   /** Set on frontier_answer / frontier_steer / frontier_continue_task results only. */
@@ -242,6 +245,7 @@ export function parsePayload(v: unknown): TaskPayload | null {
     cursor: num(r.cursor),
     more: r.more === true,
     org: typeof r.org === 'string' && r.org ? r.org.slice(0, 80) : null,
+    source: SOURCES.find((s) => s === r.source) ?? null,
     turn: typeof r.turn === 'number' && Number.isInteger(r.turn) && r.turn >= 1 ? Math.min(r.turn, 10_000) : 1,
     skills: list(r.skills, 20)
       .map((s) => ({ playbook: str(s.playbook, 80), skill: str(s.skill, 80) }))

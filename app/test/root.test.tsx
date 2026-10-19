@@ -19,6 +19,9 @@ function rig(theme: 'light' | 'dark' = 'light', tools = false, answer: Bridge['a
     canCallTools: () => tools,
     onReady: (cb) => (onReady = cb),
     answer: vi.fn(answer),
+    onList: () => {},
+    listTasks: async () => ({ kind: 'failed', message: '' }),
+    deleteTask: async () => ({ kind: 'failed', message: '' }),
   };
   return {
     bridge,
@@ -115,5 +118,105 @@ describe('Root', () => {
     expect(r.bridge.answer).toHaveBeenCalledWith('t1', 'ask_1', [{ questionId: 'q', kind: 'confirm', value: true }]);
     screen.getByText('Carrying on');
     screen.getByText('Answered');
+  });
+});
+
+describe('Root: your Frontier tasks', () => {
+  const listOf = (ids: number[], o: Record<string, unknown> = {}) => ({
+    view: 'list',
+    items: ids.map((n) => ({ task_id: `t${n}`, title: `Task ${n}`, status: 'done', started_at: '2026-10-18T09:42:00Z', source: 'claude', work_ms: 1000, turn: 1 })),
+    total: 12, shown: ids.length, next_cursor: 'c1', filters: { days: 7, status: null, source: null }, capped: false, ...o,
+  });
+  function listRig() {
+    let onList: (l: unknown) => void = () => {};
+    let onReady: () => void = () => {};
+    const bridge = {
+      onPayload: () => {},
+      getTask: vi.fn(async (id: string) => ({ ...done, task_id: id, title: `Detail of ${id}` }) as TaskPayload),
+      theme: () => 'light' as const,
+      onThemeChange: () => {},
+      onConnectError: () => {},
+      canCallTools: () => true,
+      onReady: (cb: () => void) => (onReady = cb),
+      answer: async () => ({ kind: 'failed' as const, message: '' }),
+      onList: (cb: (l: unknown) => void) => (onList = cb),
+      listTasks: vi.fn(async (q: { cursor?: string | null }) => ({
+        kind: 'ok' as const,
+        list: (q.cursor ? listOf([3, 4], { shown: 4, next_cursor: null }) : listOf([1, 2])) as never,
+      })),
+      deleteTask: vi.fn(async () => ({ kind: 'deleted' as const })),
+    };
+    return { bridge: bridge as unknown as Bridge & typeof bridge, list: (l: unknown) => onList(l), ready: () => onReady() };
+  }
+  const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+  it('a list tool result shows the list; Show more appends; opening a task and going back keeps the loaded rows', async () => {
+    const r = listRig();
+    const { parseList } = await import('../src/list');
+    render(<Root makeBridge={() => r.bridge} />);
+    act(() => r.list(parseList(listOf([1, 2]))));
+    act(() => r.ready());
+    screen.getByText('Your Frontier tasks');
+    fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    await flush();
+    expect(r.bridge.listTasks).toHaveBeenCalledWith({ days: 7, status: null, source: null, cursor: 'c1' });
+    screen.getByText('Task 4');
+    screen.getByText('4 of 12');
+    fireEvent.click(screen.getByRole('button', { name: 'Task 3' }));
+    await flush();
+    expect(r.bridge.getTask).toHaveBeenCalledWith('t3', 0);
+    screen.getByText('Detail of t3');
+    fireEvent.click(screen.getByRole('button', { name: 'All tasks' }));
+    screen.getByText('Your Frontier tasks');
+    screen.getByText('Task 4');
+    screen.getByText('4 of 12');
+    expect(document.activeElement?.textContent).toBe('Task 3');
+  });
+
+  it('a task opened from a plain task result has no back bar', async () => {
+    const r = rig();
+    render(<Root makeBridge={() => r.bridge} />);
+    act(() => r.payload(done));
+    expect(screen.queryByRole('button', { name: 'All tasks' })).toBeNull();
+  });
+
+  it('deleting removes the row and lowers the count', async () => {
+    const r = listRig();
+    const { parseList } = await import('../src/list');
+    render(<Root makeBridge={() => r.bridge} />);
+    act(() => r.list(parseList(listOf([1, 2]))));
+    act(() => r.ready());
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for Task 1' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Delete/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await flush();
+    expect(r.bridge.deleteTask).toHaveBeenCalledWith('t1');
+    expect(screen.queryByText('Task 1')).toBeNull();
+    screen.getByText('1 of 11');
+  });
+
+  it('before the host forwards tool calls the list is read-only', async () => {
+    const r = listRig();
+    const { parseList } = await import('../src/list');
+    render(<Root makeBridge={() => r.bridge} />);
+    act(() => r.list(parseList(listOf([1]))));
+    screen.getByText('Ask in the chat to filter or open a task');
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('a delete the bridge reports as done (also task_not_found: deleted elsewhere) removes the row with no error', async () => {
+    const r = listRig();
+    (r.bridge.deleteTask as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: 'deleted' });
+    const { parseList } = await import('../src/list');
+    render(<Root makeBridge={() => r.bridge} />);
+    act(() => r.list(parseList(listOf([1, 2]))));
+    act(() => r.ready());
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for Task 2' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Delete/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await flush();
+    expect(screen.queryByText('Task 2')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+    screen.getByText('1 of 11');
   });
 });

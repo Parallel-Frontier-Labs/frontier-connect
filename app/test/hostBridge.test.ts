@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { App } from '@modelcontextprotocol/ext-apps';
-import { createHostBridge, SEND_FAILED } from '../src/hostBridge';
+import { createHostBridge, DELETE_FAILED, LIST_FAILED, SEND_FAILED } from '../src/hostBridge';
 import type { TaskPayload } from '../src/types';
 
 const payload = { task_id: 't', status: 'running', cursor: 4 } as unknown as TaskPayload;
@@ -147,5 +147,59 @@ describe('createHostBridge', () => {
     expect(await b.answer('t', 'ask_1', { values: {} })).toEqual({ kind: 'failed', message: SEND_FAILED });
     // Never retried.
     expect(app.callServerTool).toHaveBeenCalledTimes(6);
+  });
+
+  const list = { view: 'list', items: [{ task_id: 't1', title: 'A', status: 'done', started_at: '2026-10-18T09:00:00Z', source: 'claude', work_ms: 1, turn: 1 }],
+    total: 1, shown: 1, next_cursor: null, filters: { days: 7, status: null, source: null }, capped: false };
+
+  it('routes list results to onList (replayed when registered late) and task results to onPayload', () => {
+    const app = fake();
+    const b = createHostBridge(app);
+    app.ontoolresult({ structuredContent: list });
+    const lists: unknown[] = [];
+    const tasks: unknown[] = [];
+    b.onList((l) => lists.push(l));
+    b.onPayload((p) => tasks.push(p));
+    expect(lists.length).toBe(1);
+    expect(tasks.length).toBe(0);
+    app.ontoolresult({ structuredContent: payload });
+    expect(tasks.length).toBe(1);
+    expect(lists.length).toBe(1);
+  });
+
+  it('listTasks sends only the set filters and maps errors', async () => {
+    const app = fake();
+    const b = createHostBridge(app);
+    app.callServerTool.mockResolvedValueOnce({ structuredContent: list });
+    const ok = await b.listTasks({ days: 30, status: 'done', source: null, cursor: null });
+    expect(app.callServerTool).toHaveBeenCalledWith({ name: 'frontier_list_tasks', arguments: { days: 30, status: 'done' } });
+    expect(ok.kind === 'ok' && ok.list.items[0]!.task_id).toBe('t1');
+    app.callServerTool.mockResolvedValueOnce({ structuredContent: list });
+    await b.listTasks({ days: 7, cursor: 'abc' });
+    expect(app.callServerTool).toHaveBeenLastCalledWith({ name: 'frontier_list_tasks', arguments: { days: 7, cursor: 'abc' } });
+    app.callServerTool.mockResolvedValueOnce({ isError: true, structuredContent: { error: { code: 'invalid_state', message: 'That cursor belongs to other filters.' } } });
+    expect(await b.listTasks({ days: 7 })).toEqual({ kind: 'failed', message: 'That cursor belongs to other filters.' });
+    app.callServerTool.mockRejectedValueOnce(new Error('x'));
+    expect(await b.listTasks({ days: 7 })).toEqual({ kind: 'failed', message: LIST_FAILED });
+    app.callServerTool.mockResolvedValueOnce({ structuredContent: payload });
+    expect(await b.listTasks({ days: 7 })).toEqual({ kind: 'failed', message: LIST_FAILED });
+  });
+
+  it('deleteTask calls frontier_delete_task once and maps accepted, refused and errors', async () => {
+    const app = fake();
+    const b = createHostBridge(app);
+    app.callServerTool.mockResolvedValueOnce({ structuredContent: { task_id: 't1', accepted: true } });
+    expect(await b.deleteTask('t1')).toEqual({ kind: 'deleted' });
+    expect(app.callServerTool).toHaveBeenCalledWith({ name: 'frontier_delete_task', arguments: { task_id: 't1' } });
+    app.callServerTool.mockResolvedValueOnce({ structuredContent: { task_id: 't1', accepted: false, reason: 'Stop the task first.' } });
+    expect(await b.deleteTask('t1')).toEqual({ kind: 'refused', reason: 'Stop the task first.' });
+    // Deleted elsewhere already: gone either way, so it counts as deleted (no error for the user).
+    app.callServerTool.mockResolvedValueOnce({ isError: true, structuredContent: { error: { code: 'task_not_found', message: 'No such task.' } } });
+    expect(await b.deleteTask('t1')).toEqual({ kind: 'deleted' });
+    app.callServerTool.mockResolvedValueOnce({ isError: true, structuredContent: { error: { code: 'payment_required', message: 'Your plan is inactive.' } } });
+    expect(await b.deleteTask('t1')).toEqual({ kind: 'failed', message: 'Your plan is inactive.' });
+    app.callServerTool.mockRejectedValueOnce(new Error('timeout'));
+    expect(await b.deleteTask('t1')).toEqual({ kind: 'failed', message: DELETE_FAILED });
+    expect(app.callServerTool).toHaveBeenCalledTimes(5);
   });
 });
