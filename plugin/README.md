@@ -26,9 +26,8 @@ helper runs, approve its network access.
 1. Go to **Customize > Plugins > Add > Add marketplace** and enter
    `https://github.com/Parallel-Frontier-Labs/frontier-connect`.
 2. Install **Frontier**, then connect it from the plugin's **Connectors** tab and sign in.
-3. In Cowork, allow `api.parallelfrontier.io` and Frontier's file-storage host in the
-   workspace's network allowlist, so the helper can move files. If a host is missing, the helper
-   names it in its error ("Could not reach <host>"); add that host.
+3. The helper moves files through `api.parallelfrontier.io` only, so that is the one host it
+   needs to reach.
 
 In Claude Code: `/plugin marketplace add Parallel-Frontier-Labs/frontier-connect`, then
 `/plugin install frontier@parallel-frontier`.

@@ -41,6 +41,7 @@ import socket
 import stat
 import sys
 import tempfile
+import threading
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -56,7 +57,7 @@ WORKERS = 4
 TIMEOUT_S = 60
 MAX_JSON_BYTES = 32 * 1024 * 1024
 CHUNK = 1024 * 1024
-USER_AGENT = "frontier-plugin/0.1.0"
+USER_AGENT = "frontier-plugin/0.1.7"
 DEFAULT_MIME = "application/octet-stream"
 
 EXPIRED = ("This Frontier link has expired or was already used. Ask the assistant to request a "
@@ -73,13 +74,12 @@ RESERVED_TOP_FILES = frozenset({"folder-index.md", "context.md"})
 
 
 def net_hint(hosts: set[str]) -> str:
-    """What to do when a host could not be reached: names hosts only, never a URL."""
-    named = sorted(hosts)
-    need = [API_HOST] + [h for h in named if h != API_HOST]
-    storage = "" if len(need) > 1 else " and the file-storage host Frontier's links point to"
-    return (f"Could not reach {', '.join(named)}. This command needs network access. In Codex, "
-            f"approve network access for it. In Cowork, the workspace's network allowlist must "
-            f"include {', '.join(need)}{storage}.")
+    """What to say when Frontier could not be reached. It names api.parallelfrontier.io only when
+    that host itself failed, never a storage host, and never asks the user to change network
+    settings (spec 2026-10-20-connector-files-worker-design)."""
+    if API_HOST in hosts:
+        return f"Could not reach Frontier ({API_HOST}). Check the connection and try again."
+    return "Could not reach Frontier. Check the connection and try again."
 
 
 class UsageError(Exception):
@@ -87,7 +87,11 @@ class UsageError(Exception):
 
 
 class FrontierError(Exception):
-    """Frontier or the network refused: exit 1."""
+    """Frontier or the network refused: exit 1. `status` is the HTTP status when Frontier answered."""
+
+    def __init__(self, message: str = "", status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 # --- folder-relative paths: the same rules as Frontier's server-side check ------------------
@@ -247,7 +251,8 @@ def ticket_call(origin: str, raw: str, method: str, sub: str, body: dict | None,
         if code == 429:
             raise FrontierError(RATE_LIMITED) from None
         if code == 400:
-            raise FrontierError(f"Frontier refused the request: {detail or 'bad request'}") from None
+            raise FrontierError(f"Frontier refused the request: {detail or 'bad request'}",
+                                status=400) from None
         if code == 402:  # the paid check: waiting will not fix it
             raise FrontierError(PLAN_INACTIVE) from None
         if code in (401, 403):
@@ -267,7 +272,7 @@ def _host(url: str) -> str:
 
 
 # Errors raised while a request or response is in flight. Only these count as network failures
-# (retried once, reported with the host and the allowlist hint); local file errors never do.
+# (retried once, reported as a network failure); local file errors never do.
 _IN_FLIGHT = (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError,
               http.client.HTTPException)
 
@@ -435,7 +440,8 @@ _DROP_HEADERS = frozenset({"content-length", "host", "transfer-encoding", "conne
                            "authorization"})
 
 
-def _put_once(item: Local, up: dict, test: bool) -> None:
+def _put_range(item: Local, url: str, up: dict, offset: int, length: int, test: bool) -> None:
+    """PUT `length` bytes of the file from `offset` (the whole file, or one part)."""
     headers = {"User-Agent": USER_AGENT}
     for k, v in (up.get("headers") or {}).items():
         if (not isinstance(k, str) or not isinstance(v, str) or not _HEADER_NAME.fullmatch(k)
@@ -453,11 +459,29 @@ def _put_once(item: Local, up: dict, test: bool) -> None:
         st = os.fstat(f.fileno())
         if st.st_size != item.size or (item.ino and (st.st_dev, st.st_ino) != (item.dev, item.ino)):
             raise _Failure("the file changed since it was listed")
-        headers["Content-Length"] = str(item.size)
-        req = urllib.request.Request(up["put_url"], data=_Exact(f, item.size), method="PUT",
-                                     headers=headers)
+        f.seek(offset)
+        headers["Content-Length"] = str(length)
+        req = urllib.request.Request(url, data=_Exact(f, length), method="PUT", headers=headers)
         with _opener(test).open(req, timeout=TIMEOUT_S) as resp:
             resp.read(64 * 1024)
+
+
+def _part_plan(up: dict, size: int, test: bool) -> list[tuple[int, int, int, str]] | None:
+    """[(n, offset, length, url)] for a multipart entry, or None when it is unusable: parts must
+    be numbered 1..N, each a positive size with an https link, adding up to the file's size."""
+    parts = up.get("parts")
+    if not isinstance(parts, list) or not parts:
+        return None
+    out: list[tuple[int, int, int, str]] = []
+    off = 0
+    for n, p in enumerate(parts, 1):
+        if (not isinstance(p, dict) or type(p.get("n")) is not int or p["n"] != n
+                or type(p.get("size")) is not int
+                or p["size"] <= 0 or not link_ok(p.get("put_url"), test)):
+            return None
+        out.append((n, off, p["size"], p["put_url"]))
+        off += p["size"]
+    return out if off == size else None
 
 
 def _with_retry(url: str, fn, *args) -> tuple[str | None, str | None]:  # noqa: ANN001
@@ -475,7 +499,7 @@ def _with_retry(url: str, fn, *args) -> tuple[str | None, str | None]:  # noqa: 
             if attempt == 2 or not _retryable(exc):
                 host = _host(url) if _network(exc) else None
                 if host:
-                    return f"could not reach {host}", host
+                    return "could not reach Frontier", host
                 if isinstance(exc, OSError) and not isinstance(exc, urllib.error.HTTPError):
                     return str(_local(exc, "file error")), None
                 return _describe(exc), None
@@ -526,36 +550,91 @@ def stage(args: argparse.Namespace) -> int:
             entry["explicit"] = True
         manifest.append(entry)
     print(f"Listing {len(files)} files for Frontier...", file=sys.stderr)
-    resp = ticket_call(origin, raw, "POST", "/manifest", {"files": manifest}, test)
+    try:
+        resp = ticket_call(origin, raw, "POST", "/manifest", {"files": manifest, "multipart": True}, test)
+    except FrontierError as exc:
+        if exc.status != 400:
+            raise
+        # A backend from before multipart rejects the unknown field before it uses the ticket:
+        # ask once more without it and every file gets a single put_url.
+        resp = ticket_call(origin, raw, "POST", "/manifest", {"files": manifest}, test)
     by_rel = {f.rel: f for f in files}
     uploads = resp.get("uploads") if isinstance(resp.get("uploads"), list) else []
     skipped = resp.get("skipped") if isinstance(resp.get("skipped"), list) else []
     failed: list[str] = []
-    jobs: list[tuple[Local, dict]] = []
+    bad_plans: list[str] = []  # an open upload server-side whose plan we cannot use: abort it
+    singles: list[tuple[Local, dict]] = []
+    multis: dict[str, tuple[Local, dict, list]] = {}
     seen: set[str] = set()
     for up in uploads:
         path = up.get("path") if isinstance(up, dict) else None
         item = by_rel.get(path) if isinstance(path, str) else None
-        if item is None or path in seen or not link_ok(up.get("put_url"), test):
+        if item is None or path in seen:
             failed.append(path if isinstance(path, str) else "?")
             continue
+        plan = _part_plan(up, item.size, test) if "parts" in up else None
+        if plan is None and ("parts" in up or not link_ok(up.get("put_url"), test)):
+            failed.append(path)
+            if "parts" in up:
+                bad_plans.append(path)
+            continue
         seen.add(path)
-        jobs.append((item, up))
-    uploaded = 0
+        if plan is None:
+            singles.append((item, up))
+        else:
+            multis[path] = (item, up, plan)
+    jobs = [(item, up["put_url"], up, 0, item.size) for item, up in singles]
+    jobs += [(item, url, up, off, n) for item, up, plan in multis.values() for _i, off, n, url in plan]
+    reasons: dict[str, str] = {}
+    net: set[str] = set()
     hosts: set[str] = set()
-    net_failed = 0
+    broken: dict[str, str] = {}  # rel -> why its first part failed; later parts are not sent
+    broken_lock = threading.Lock()
+
+    def send(j: tuple) -> tuple[str, tuple[str | None, str | None]]:
+        rel = j[0].rel
+        with broken_lock:
+            why = broken.get(rel)
+        if why is not None:
+            return rel, (why, None)
+        res = _with_retry(j[1], _put_range, *j, test)
+        if res[0] is not None:
+            with broken_lock:
+                broken.setdefault(rel, res[0])
+        return rel, res
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        results = pool.map(lambda j: (j[0].rel, _with_retry(j[1]["put_url"], _put_once, j[0], j[1],
-                                                            test)), jobs)
-        for rel, (reason, host) in results:
-            if reason is None:
-                uploaded += 1
-            else:
-                failed.append(rel)
+        for rel, (reason, host) in pool.map(send, jobs):
+            if reason is not None:
+                reasons.setdefault(rel, reason)
                 if host:
                     hosts.add(host)
-                    net_failed += 1
-                print(f"Could not upload {rel}: {reason}", file=sys.stderr)
+                    net.add(rel)
+    if multis or bad_plans:
+        done = [r for r in multis if r not in reasons]
+        dropped = [r for r in multis if r in reasons] + bad_plans
+        try:
+            fin = ticket_call(origin, raw, "POST", "/complete", {"complete": done, "abort": dropped}, test)
+            fin = fin if isinstance(fin, dict) else {}
+            done_l = fin.get("completed") if isinstance(fin.get("completed"), list) else []
+            fail_l = fin.get("failed") if isinstance(fin.get("failed"), list) else []
+            completed = {p for p in done_l if isinstance(p, str)}
+            told = {f["path"]: _clean(f.get("reason")) for f in fail_l
+                    if isinstance(f, dict) and isinstance(f.get("path"), str)}
+            for r in done:
+                if r not in completed:
+                    reasons[r] = told.get(r) or "Frontier could not finish the upload"
+        except FrontierError as exc:
+            for r in done:
+                reasons[r] = str(exc)
+    uploaded = 0
+    for rel in [i.rel for i, _ in singles] + list(multis):
+        if rel in reasons:
+            failed.append(rel)
+            print(f"Could not upload {rel}: {reasons[rel]}", file=sys.stderr)
+        else:
+            uploaded += 1
+    net_failed = len(net & set(failed))
     out: dict = {"task_id": resp.get("task_id"), "uploaded": uploaded, "skipped": len(skipped),
                  "failed": failed}
     if not_sent:

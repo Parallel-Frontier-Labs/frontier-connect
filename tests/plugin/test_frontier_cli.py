@@ -66,8 +66,14 @@ class Fake:
         self.puts: dict[str, tuple[bytes, dict]] = {}
         self.put_fail: dict[str, int] = {}  # path -> number of 500s before success
         self.put_status: dict[str, int] = {}  # path -> fixed status
+        self.multipart: dict[str, list[int]] = {}  # path -> part sizes the fake server plans
+        self.rejected: list[dict] = []  # manifests answered 400 for "multipart"
+        self.completes: list[dict] = []  # bodies POSTed to /v1/connect/t/complete
+        self.complete_fail: set[str] = set()
+        self.complete_raw: object = None  # when set, /complete answers with this
         self.skip_names: set[str] = set()
         self.manifest_status = 200
+        self.reject_multipart = False  # a pre-multipart backend: 400 on the unknown field
         self.extra_uploads: list[dict] = []
         self.put_url_override: dict[str, str] = {}
         self.download: dict = {}
@@ -119,11 +125,25 @@ def make_handler(fake: Fake):
                 if fake.ack_status != 200:
                     return self._json(fake.ack_status, {"detail": "nope"})
                 return self._json(200, {"ok": True})
+            if self.path == "/v1/connect/t/complete" and self._authed():
+                b = json.loads(body)
+                with fake.lock:
+                    fake.completes.append(b)
+                if fake.complete_raw is not None:
+                    return self._json(200, fake.complete_raw)
+                ok = [p for p in b.get("complete", []) if p not in fake.complete_fail]
+                return self._json(200, {"completed": ok, "failed": [
+                    {"path": p, "reason": "parts missing or the wrong size"}
+                    for p in b.get("complete", []) if p in fake.complete_fail]})
             if self.path != "/v1/connect/t/manifest" or not self._authed():
                 return self._json(404, {"detail": "not found"})
             if fake.manifest_status != 200:
                 return self._json(fake.manifest_status, {"detail": "nope"})
             m = json.loads(body)
+            if fake.reject_multipart and "multipart" in m:
+                with fake.lock:
+                    fake.rejected.append(m)
+                return self._json(400, {"detail": "extra fields not permitted"})
             fake.manifests.append(m)
             uploads, skipped = [], []
             for f in m["files"]:
@@ -131,13 +151,24 @@ def make_handler(fake: Fake):
                 if name in fake.skip_names:
                     skipped.append({"path": f["path"]})
                     continue
-                url = fake.put_url_override.get(f["path"],
-                                                f"{fake.base}/put/{len(uploads)}?sig=s3cr3t")
+                i = len(uploads)
+                if m.get("multipart") and f["path"] in fake.multipart:
+                    parts = []
+                    for n, size in enumerate(fake.multipart[f["path"]], 1):
+                        route = f"/part/{i}/{n}?sig=s3cr3t"
+                        parts.append({"n": n, "size": size, "put_url": f"{fake.base}{route}"})
+                        with fake.lock:
+                            fake.put_route = getattr(fake, "put_route", {})
+                            fake.put_route[route] = f"{f['path']}#{n}"
+                    uploads.append({"path": f["path"], "parts": parts,
+                                    "headers": {"Content-Type": f["mime"]}})
+                    continue
+                url = fake.put_url_override.get(f["path"], f"{fake.base}/put/{i}?sig=s3cr3t")
                 uploads.append({"path": f["path"], "put_url": url,
                                 "headers": {"Content-Type": f["mime"]}})
                 with fake.lock:
                     fake.put_route = getattr(fake, "put_route", {})
-                    fake.put_route[f"/put/{len(uploads) - 1}?sig=s3cr3t"] = f["path"]
+                    fake.put_route[f"/put/{i}?sig=s3cr3t"] = f["path"]
             uploads += fake.extra_uploads
             self._json(200, {"task_id": TASK, "uploads": uploads, "skipped": skipped,
                              "expires_in_s": 600})
@@ -262,6 +293,13 @@ class PathRules(unittest.TestCase):
 
 
 class Tickets(unittest.TestCase):
+    def test_net_hint_names_only_the_api_host(self):
+        self.assertEqual(fr.net_hint({"api.parallelfrontier.io"}),
+                         "Could not reach Frontier (api.parallelfrontier.io). Check the connection "
+                         "and try again.")
+        self.assertEqual(fr.net_hint({"files.storage.example"}),
+                         "Could not reach Frontier. Check the connection and try again.")
+
     def test_production_ticket_parses(self):
         raw = fr.parse_ticket(f"https://api.parallelfrontier.io/v1/connect/t#{RAW}", None)
         self.assertEqual(raw, ("https://api.parallelfrontier.io", RAW))
@@ -488,15 +526,15 @@ class Stage(Base):
         self.assertEqual(code, 3)
         self.assertIn("expired", err)
 
-    def test_storage_host_unreachable_names_host(self):
+    def test_storage_unreachable_says_frontier_and_names_no_host(self):
         root = self.tree({"a.pdf": b"1"})
         self.fake.put_url_override = {"a.pdf": "https://127.0.0.1:1/put?sig=s3cr3t"}
         code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
         self.assertEqual(code, 1)
         self.assertEqual(out["failed"], ["a.pdf"])
-        self.assertIn("127.0.0.1", err)
-        self.assertIn("api.parallelfrontier.io", err)
-        self.assertIn("allowlist", err)
+        self.assertIn("Could not reach Frontier", err)
+        for word in ("127.0.0.1", "allowlist", "allow list", "network settings"):
+            self.assertNotIn(word, err)
 
     def test_explicit_symlinked_folder_inside_root(self):
         root = self.tree({"real/a.txt": b"1"})
@@ -552,6 +590,138 @@ class Stage(Base):
         self.assertEqual(code, 3)
         self.assertEqual(out["uploaded"], 1)
         self.assertEqual(out["failed"], ["../etc/passwd"])
+
+
+class Multipart(Base):
+    DATA = b"0123456789"
+
+    def test_slices_upload_then_complete(self):
+        root = self.tree({"big.bin": self.DATA, "a.pdf": b"1"})
+        self.fake.multipart = {"big.bin": [4, 4, 2]}
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 0, err)
+        self.assertIs(self.fake.manifests[0]["multipart"], True)
+        self.assertEqual([self.fake.puts[f"big.bin#{n}"][0] for n in (1, 2, 3)], [b"0123", b"4567", b"89"])
+        self.assertEqual(self.fake.puts["big.bin#3"][1]["Content-Length"], "2")
+        self.assertEqual(self.fake.completes, [{"complete": ["big.bin"], "abort": []}])
+        self.assertEqual(out["uploaded"], 2)
+        self.assertEqual(out["failed"], [])
+
+    def test_a_failed_part_aborts_the_file(self):
+        root = self.tree({"big.bin": self.DATA})
+        self.fake.multipart = {"big.bin": [4, 4, 2]}
+        self.fake.put_status = {"big.bin#2": 403}
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 3)
+        self.assertEqual(out["failed"], ["big.bin"])
+        self.assertEqual(self.fake.completes, [{"complete": [], "abort": ["big.bin"]}])
+        self.assertIn("expired", err)
+
+    def test_parts_that_do_not_add_up_are_never_sent(self):
+        root = self.tree({"big.bin": self.DATA})
+        self.fake.multipart = {"big.bin": [4, 4]}
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 3)
+        self.assertEqual(out["failed"], ["big.bin"])
+        self.assertFalse([p for m, p, _ in self.fake.requests if p.startswith("/part/")])
+        # The upload is open server-side: an unusable plan is aborted, not just reported.
+        self.assertEqual(self.fake.completes, [{"complete": [], "abort": ["big.bin"]}])
+
+    def test_frontier_refusing_to_finish_fails_the_file(self):
+        root = self.tree({"big.bin": self.DATA})
+        self.fake.multipart = {"big.bin": [4, 4, 2]}
+        self.fake.complete_fail = {"big.bin"}
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 3)
+        self.assertEqual(out["failed"], ["big.bin"])
+        self.assertIn("Could not upload big.bin: parts missing or the wrong size", err)
+
+    def test_malformed_complete_answer_fails_the_file_without_a_traceback(self):
+        for raw in ({"completed": "big.bin", "failed": {"x": 1}}, [1, 2], {"completed": 7, "failed": True},
+                    {"completed": [1, None], "failed": [3, {"path": 5}]}):
+            with self.subTest(raw=raw):
+                self.fake.completes.clear()
+                root = self.tree({"big.bin": self.DATA})
+                self.fake.multipart = {"big.bin": [4, 4, 2]}
+                self.fake.complete_raw = raw
+                code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+                self.assertEqual(code, 3, err)
+                self.assertEqual(out["failed"], ["big.bin"])
+                self.assertNotIn("Traceback", err)
+                self.assertIn("Could not upload big.bin", err)
+
+    def test_a_bad_parts_plan_never_falls_back_to_put_url(self):
+        root = self.tree({"big.bin": self.DATA})
+        self.fake.extra_uploads = [{"path": "big.bin", "put_url": f"{self.fake.base}/put/9",
+                                    "parts": [{"n": True, "size": 10, "put_url": f"{self.fake.base}/part/9"}],
+                                    "headers": {}}]
+        self.fake.skip_names = {"big.bin"}
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 3)
+        self.assertEqual(out["failed"], ["big.bin"])
+        self.assertFalse([p for m, p, _ in self.fake.requests if p.startswith(("/put/", "/part/"))])
+
+    def test_a_400_on_multipart_retries_the_manifest_once_without_it(self):
+        root = self.tree({"big.bin": self.DATA, "a.pdf": b"1"})
+        self.fake.multipart = {"big.bin": [4, 4, 2]}
+        self.fake.reject_multipart = True
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(self.fake.rejected), 1)
+        self.assertNotIn("multipart", self.fake.manifests[0])
+        self.assertEqual(len(self.fake.manifests), 1)
+        self.assertEqual(out["uploaded"], 2)
+        self.assertEqual(self.fake.puts["big.bin"][0], self.DATA)  # a single put_url
+
+    def test_only_a_400_is_retried_and_only_once(self):
+        root = self.tree({"a.pdf": b"1"})
+        for status in (400, 403, 429, 500):
+            with self.subTest(status=status):
+                self.fake.manifest_status = status
+                before = len([1 for _m, p, _h in self.fake.requests if p.endswith("/manifest")])
+                code, _out, _err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+                self.assertEqual(code, 1)
+                after = len([1 for _m, p, _h in self.fake.requests if p.endswith("/manifest")])
+                self.assertEqual(after - before, 2 if status == 400 else 1)
+
+    def test_one_failed_part_stops_the_files_remaining_parts(self):
+        root = self.tree({"big.bin": self.DATA})
+        self.fake.multipart = {"big.bin": [4, 4, 2]}
+        self.fake.put_status = {"big.bin#1": 403}
+        with mock.patch.object(fr, "WORKERS", 1):
+            code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 3)
+        sent = [p for m, p, _ in self.fake.requests if m == "PUT"]
+        self.assertEqual(len(sent), 1, sent)  # parts 2 and 3 were never PUT
+        self.assertEqual(out["failed"], ["big.bin"])
+        self.assertIn("Could not upload big.bin: the link expired", err)
+        self.assertEqual(self.fake.completes, [{"complete": [], "abort": ["big.bin"]}])
+
+    def test_a_failed_file_does_not_stop_the_other_files(self):
+        root = self.tree({"big.bin": self.DATA, "other.bin": self.DATA})
+        self.fake.multipart = {"big.bin": [4, 4, 2], "other.bin": [4, 4, 2]}
+        self.fake.put_status = {"big.bin#1": 403}
+        with mock.patch.object(fr, "WORKERS", 1):
+            code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 3)
+        self.assertEqual(out["failed"], ["big.bin"])
+        self.assertEqual([self.fake.puts[f"other.bin#{n}"][0] for n in (1, 2, 3)], [b"0123", b"4567", b"89"])
+
+    def test_the_codex_manifest_version_matches_the_user_agent_too(self):
+        manifest = json.loads((HERE.parent.parent / "plugin" / ".codex-plugin" / "plugin.json").read_text())
+        self.assertEqual(fr.USER_AGENT, f"frontier-plugin/{manifest['version']}")
+
+    def test_user_agent_matches_the_plugin_version(self):
+        manifest = json.loads((HERE.parent.parent / "plugin" / ".claude-plugin" / "plugin.json").read_text())
+        self.assertEqual(fr.USER_AGENT, f"frontier-plugin/{manifest['version']}")
+
+    def test_every_request_sends_the_helper_user_agent(self):
+        root = self.tree({"big.bin": self.DATA, "a.pdf": b"1"})
+        self.fake.multipart = {"big.bin": [4, 4, 2]}
+        code, _out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 0, err)
+        agents = {h.get("User-Agent") for _m, _p, h in self.fake.requests}
+        self.assertEqual(agents, {fr.USER_AGENT})
 
 
 class Fetch(Base):
@@ -1368,14 +1538,15 @@ class Fetch(Base):
         self.assertEqual(out["files"], 0)
         self.assertEqual(list(self.to.iterdir()), [])
 
-    def test_storage_host_unreachable(self):
+    def test_storage_unreachable_says_frontier_and_names_no_host(self):
         self.offer({"a.bin": b"abc"})
         self.fake.download["files"][0]["url"] = "https://127.0.0.1:1/get/0?sig=s3cr3t"
         code, out, err = self.fetch()
         self.assertEqual(code, 1)
         self.assertEqual(out["failed"], ["a.bin"])
-        self.assertIn("127.0.0.1", err)
-        self.assertIn("allowlist", err)
+        self.assertIn("Could not reach Frontier", err)
+        for word in ("127.0.0.1", "allowlist"):
+            self.assertNotIn(word, err)
 
     def _temp_open(self, fail_on: str):
         """An open() for the helper module whose temp-copy writes fail with ENOSPC."""
