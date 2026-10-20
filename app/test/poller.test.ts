@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Poller, SAVED_BACKOFF_MS } from '../src/poller';
+import { DIRECT_RETRY_MS, Poller, SAVED_BACKOFF_MS } from '../src/poller';
 import type { Bridge } from '../src/bridge';
 import type { TaskPayload } from '../src/types';
 
@@ -349,4 +349,36 @@ describe('Poller', () => {
       }
     });
   });
+
+  it('while host-only, tries the direct path every 30 s and goes back to it when it answers', async () => {
+    let down = false;
+    const f = vi.fn(async () => { if (down) throw new TypeError('offline'); return resp(200, mk({ cursor: 4 })); });
+    const r = rig(f, async () => mk({ cursor: 4 }));
+    const modes: string[] = [];
+    (r.poller as unknown as { onMode: (m: string) => void }).onMode = (m) => modes.push(m);
+    r.poller.start(mk());
+    await r.fire(); // a direct read works
+    expect(r.poller.everDirect).toBe(true);
+    down = true;
+    await r.fire(); // one blip: host-only for now
+    expect(r.poller.mode).toBe('bridge');
+    const calls = f.mock.calls.length;
+    await r.fire(); // 3 s later: still within 30 s, the host is read instead
+    expect(f.mock.calls.length).toBe(calls);
+    down = false;
+    r.setNow(DIRECT_RETRY_MS + 1);
+    await r.fire(); // the retry comes due and answers
+    expect(r.poller.mode).toBe('direct');
+    expect(modes).toEqual(['bridge', 'direct']);
+    expect(DIRECT_RETRY_MS).toBe(30_000);
+  });
+
+  it('never-direct: a host that blocks from the first read has everDirect false', async () => {
+    const r = rig(async () => { throw new TypeError('blocked'); }, async () => mk());
+    r.poller.start(mk());
+    await r.fire();
+    expect(r.poller.mode).toBe('bridge');
+    expect(r.poller.everDirect).toBe(false);
+  });
 });
+

@@ -9,9 +9,13 @@ export interface PollerOptions {
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (h: unknown) => void;
   onUpdate: (p: TaskPayload) => void;
+  /** The transport changed: 'bridge' when the host blocks the card's own requests. */
+  onMode?: (m: 'direct' | 'bridge') => void;
 }
 
 const REFRESH_WINDOW_MS = 120_000;
+/** While reading through the host only, the direct path is tried again this often. */
+export const DIRECT_RETRY_MS = 30_000;
 /** After a finished task with files and no `saved`, the card keeps reading it a little longer so
  * the plugin helper's "saved to your folder" acknowledgement shows up: these waits, 3 min in all. */
 export const SAVED_BACKOFF_MS: readonly number[] = [5000, 10_000, 20_000, 30_000, 30_000, 30_000, 30_000, 25_000];
@@ -37,6 +41,7 @@ export class Poller {
   private setTimer: (fn: () => void, ms: number) => unknown;
   private clearTimer: (h: unknown) => void;
   private onUpdate: (p: TaskPayload) => void;
+  private onMode?: (m: 'direct' | 'bridge') => void;
 
   constructor(o: PollerOptions) {
     this.bridge = o.bridge;
@@ -45,6 +50,7 @@ export class Poller {
     this.setTimer = o.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
     this.clearTimer = o.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>));
     this.onUpdate = o.onUpdate;
+    this.onMode = o.onMode;
   }
 
   start(raw: TaskPayload): void {
@@ -56,11 +62,43 @@ export class Poller {
       // A new task must never reuse the old view token, URL, cursor or transport.
       this.payload = null;
       this.expiresAt = Infinity;
-      this.mode = 'direct';
+      this.everDirect = false;
+      this.setMode('direct');
     }
     this.accept(p);
     if (!TERMINAL.has(p.status)) this.schedule();
     else this.beginSettle();
+  }
+
+  /** The current view token and url (for the browser frame feed), or null when there is none. */
+  view(): { token: string; url: string; taskId: string } | null {
+    const p = this.payload;
+    return p?.view ? { token: p.view.token, url: p.view.url, taskId: p.task_id } : null;
+  }
+
+  private renewing: Promise<boolean> | null = null;
+  /** Another reader (the browser frame feed) had the view token refused: fetch a fresh one through
+   * the bridge. Concurrent callers share one refresh. True when a new token arrived. */
+  renewToken(): Promise<boolean> {
+    if (!this.renewing) {
+      this.renewing = this.refresh(this.gen).finally(() => {
+        this.renewing = null;
+      });
+    }
+    return this.renewing;
+  }
+
+  private ticking = false;
+  private poked = false;
+  /** Read the task now instead of at the next interval (the user just resumed or stopped it). */
+  poke(): void {
+    if (!this.running) return;
+    if (this.ticking) {
+      this.poked = true; // the read in flight schedules the next one at once
+      return;
+    }
+    if (this.timer !== null) this.clearTimer(this.timer);
+    this.timer = this.setTimer(() => void this.tick(), 0);
   }
 
   stop(): void {
@@ -69,6 +107,17 @@ export class Poller {
     this.gen++;
     if (this.timer !== null) this.clearTimer(this.timer);
     this.timer = null;
+  }
+
+  /** A direct read of this task has worked at least once (the host does not block it). */
+  everDirect = false;
+  private probeAt = 0;
+
+  private setMode(m: 'direct' | 'bridge'): void {
+    if (m === this.mode) return;
+    this.mode = m;
+    if (m === 'bridge') this.probeAt = this.now();
+    this.onMode?.(m);
   }
 
   private waiting(): boolean {
@@ -87,6 +136,10 @@ export class Poller {
   }
 
   private interval(): number {
+    if (this.poked) {
+      this.poked = false;
+      return 0;
+    }
     if (this.settle >= 0) return SAVED_BACKOFF_MS[this.settle];
     if (this.waiting()) return 5000;
     return this.mode === 'direct' ? 1000 : 3000;
@@ -134,6 +187,7 @@ export class Poller {
     if (res.status === 401) return 'denied';
     if (res.status === 403) return 'failed';
     if (!res.ok) return 'ok';
+    this.everDirect = true;
     try {
       const body: unknown = await res.json();
       if (gen !== this.gen) return 'ok';
@@ -146,6 +200,15 @@ export class Poller {
   }
 
   private async tick(): Promise<void> {
+    this.ticking = true;
+    try {
+      await this.tickOnce();
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  private async tickOnce(): Promise<void> {
     const gen = this.gen;
     if (!this.running || !this.payload) return;
     const settling = this.settle >= 0;
@@ -169,9 +232,17 @@ export class Poller {
         if (gen !== this.gen) return;
         if (r === 'denied') r = 'failed';
       }
-      if (r === 'failed') this.mode = 'bridge';
+      if (r === 'failed') this.setMode('bridge');
     } else {
-      if (!refreshed) await this.refresh(gen);
+      // A failed read (a network blip) must not cost the direct path for good: try it again.
+      let back = false;
+      if (this.now() - this.probeAt >= DIRECT_RETRY_MS) {
+        this.probeAt = this.now();
+        back = (await this.direct(gen)) === 'ok';
+        if (gen !== this.gen) return;
+        if (back) this.setMode('direct');
+      }
+      if (!back && !refreshed) await this.refresh(gen);
       if (gen !== this.gen) return;
     }
 

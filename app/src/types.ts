@@ -35,6 +35,14 @@ export interface Skill { playbook: string; skill: string }
 export interface TaskEvent { seq: number; kind: string; text: string; code?: string }
 /** Where the plugin's helper saved the delivered files: a folder name and an ISO time. */
 export interface Saved { dir: string; at: string }
+export const BROWSER_STATES = ['live', 'waiting', 'ended'] as const;
+/** The task's cloud browser: driving (`live`), paused for the user (`waiting`) or closed. `site` is
+ * the hostname it shows, when known. */
+export interface BrowserInfo {
+  state: (typeof BROWSER_STATES)[number]; site: string | null;
+  /** The wait is a form in the task's browser (typed answers), not a sign-in: no takeover. */
+  form?: true;
+}
 
 export interface TaskPayload {
   task_id: string; status: Status; title: string; plan: PlanStep[]; sections: Section[]; live: string | null;
@@ -52,6 +60,9 @@ export interface TaskPayload {
   /** The delivered files were saved to the user's computer by the Frontier plugin's helper, into
    * the folder named `dir` (a folder name, never a path); null when not, or not for this turn. */
   saved?: Saved | null;
+  /** The task's cloud browser, when it uses one; null when it has none (or the task ended), absent
+   * when the payload does not say (older servers, some tool results). */
+  browser?: BrowserInfo | null;
   /** Set on frontier_answer / frontier_steer / frontier_continue_task results only. */
   accepted?: boolean;
   reason?: string | null;
@@ -211,6 +222,20 @@ function cleanSaved(v: unknown): Saved | null {
   return { dir, at: o.at.slice(0, 40) };
 }
 
+/** A bare hostname (letters, digits, dots, hyphens; at most 253 characters), else null. */
+export function cleanSite(v: unknown): string | null {
+  return typeof v === 'string' && v.length <= 253 && /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(v) ? v : null;
+}
+
+function cleanBrowser(v: unknown): BrowserInfo | null {
+  const o = obj(v);
+  const state = o ? BROWSER_STATES.find((s) => s === o.state) : undefined;
+  if (!o || !state) return null;
+  const out: BrowserInfo = { state, site: cleanSite(o.site) };
+  if (state === 'waiting' && o.form === true) out.form = true;
+  return out;
+}
+
 /** Validate and sanitise an untrusted payload; null when it is not a task payload at all. */
 export function parsePayload(v: unknown): TaskPayload | null {
   if (!isPayload(v)) return null;
@@ -268,6 +293,7 @@ export function parsePayload(v: unknown): TaskPayload | null {
   };
   if (typeof r.accepted === 'boolean') out.accepted = r.accepted;
   if (typeof r.reason === 'string') out.reason = r.reason.slice(0, 300);
+  if (r.browser !== undefined) out.browser = cleanBrowser(r.browser);
   if (r.view !== undefined) {
     out.view =
       view && typeof view.token === 'string' && typeof view.url === 'string'

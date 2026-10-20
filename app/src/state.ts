@@ -18,6 +18,8 @@ export function merge(prev: TaskPayload | null, next: TaskPayload): TaskPayload 
   return {
     ...next,
     view: next.view ?? prev.view,
+    // A result that does not say (an answer result, an older server) keeps what the card knew.
+    browser: next.browser !== undefined ? next.browser : prev.browser,
     cursor: Math.max(prev.cursor, next.cursor),
     events: joinEvents(prev.events, next.events),
   };

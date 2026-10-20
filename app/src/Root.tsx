@@ -4,6 +4,8 @@ import { cardClass } from './format';
 import { Generations, type Guarded, type Tag } from './generation';
 import { createHostBridge, LINK_FAILED, LIST_FAILED } from './hostBridge';
 import { appendPage, type ListPayload } from './list';
+import { BrowserFeed, postInput, sendHostReport, type FrameSource } from './browserFeed';
+import type { BrowserApi, Transport } from './view/BrowserPreview';
 import { Poller } from './poller';
 import { Card, type AnswerApi } from './view/Card';
 import type { DownloadApi } from './view/Files';
@@ -59,6 +61,14 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
   const shownTask = useRef<string | null>(null);
   // Remounts the list view when the host sends a fresh list (resets its menus and spinners).
   const [listEpoch, setListEpoch] = useState(0);
+  // Display modes the host offers (the browser preview's Full screen button).
+  const [modes, setModes] = useState<readonly string[] | undefined>(undefined);
+  const [displayMode, setDisplayMode] = useState('inline');
+  // The Poller's transport: false once the host blocks the card's own requests (bridge only).
+  const [transport, setTransport] = useState<Transport>('direct');
+  // One host report per card mount, once the handshake is done and a view token is known.
+  const hostReady = useRef(false);
+  const reported = useRef(false);
 
   /** Rows of deleted tasks never come back, whichever response carries them. */
   const clean = (l: ListPayload): ListPayload => {
@@ -96,7 +106,15 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
     };
     // Poller.start merges each payload into the previous one (state.merge), keeps the
     // transport for the same task and resets it for a new task_id; restarting is safe.
+    const report = () => {
+      const view = p.view();
+      // A host that blocks the card's own requests (bridge-only) would refuse this one too.
+      if (reported.current || !hostReady.current || !view || !bridge.hostInfo || p.mode === 'bridge') return;
+      reported.current = true;
+      void sendHostReport(view, bridge.hostInfo());
+    };
     const p = new Poller({
+      onMode: (m) => setTransport(m === 'direct' ? 'direct' : p.everDirect ? 'reconnecting' : 'blocked'),
       bridge: guardedBridge,
       fetchImpl: guardedFetch,
       onUpdate: (next) => {
@@ -108,6 +126,7 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
         }
         taskRef.current = next.task_id;
         setPayload(next);
+        report();
       },
     });
     poller.current = p;
@@ -135,7 +154,15 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
     const frame = () => setEmbedded(bridge.embedded ? bridge.embedded() : true);
     bridge.onEmbeddedChange?.(setEmbedded);
     bridge.onConnectError(() => setConnectFailed(true));
+    const readModes = () => {
+      setModes(bridge.displayModes?.());
+      setDisplayMode(bridge.displayMode?.() ?? 'inline');
+    };
+    bridge.onDisplayModeChange?.(readModes);
     bridge.onReady(() => {
+      hostReady.current = true;
+      readModes();
+      report();
       setTheme(bridge.theme());
       frame();
       setCanAnswer(bridge.canCallTools());
@@ -206,6 +233,47 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
       },
     }),
     [canAnswer],
+  );
+
+  /** The Poller's view token, for the browser frame feed and input. */
+  const frameSource = (): FrameSource | null => {
+    const p = poller.current;
+    return p ? { view: () => p.view(), renewToken: () => p.renewToken(), bridgeOnly: () => p.mode === 'bridge' } : null;
+  };
+
+  const browser: BrowserApi = useMemo(
+    () => ({
+      modes,
+      mode: displayMode,
+      feed(onFrame, onStatus) {
+        const source = frameSource();
+        return source ? new BrowserFeed({ source, onFrame, onStatus }) : null;
+      },
+      async input(taskId, events) {
+        const source = frameSource();
+        return source ? postInput(source, taskId, events) : 'failed';
+      },
+      refresh: () => poller.current?.poke(),
+      transport: () => transport,
+      ...(canAnswer && bridgeRef.current?.stopTask
+        ? {
+            async stop() {
+              const b = bridgeRef.current;
+              const taskId = taskRef.current;
+              if (!b?.stopTask || !taskId) return false;
+              const ok = await b.stopTask(taskId);
+              if (ok) poller.current?.poke();
+              return ok;
+            },
+          }
+        : {}),
+      container: () => bridgeRef.current?.hostInfo?.().container,
+      async requestDisplayMode(mode) {
+        const b = bridgeRef.current;
+        return b?.requestDisplayMode ? b.requestDisplayMode(mode) : (b?.displayMode?.() ?? 'inline');
+      },
+    }),
+    [modes, displayMode, canAnswer, transport],
   );
 
   const actions: ListActions = useMemo(
@@ -284,7 +352,7 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
   }
   if (payload && mode.kind === 'task') {
     return (
-      <Card key={payload.task_id} payload={payload} theme={theme} embedded={embedded} answer={answer} download={download}
+      <Card key={payload.task_id} payload={payload} theme={theme} embedded={embedded} answer={answer} download={download} browser={browser}
         onBack={mode.fromList && list ? back : undefined} />
     );
   }

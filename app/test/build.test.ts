@@ -44,4 +44,13 @@ describe('single-file build', () => {
       'https://openfontlicense.org',
     ]);
   });
+
+  // The browser frame feed and the host report derive their URLs from the task's view url: the
+  // route paths are in the bundle, no host is (the whitelist above stays unchanged).
+  it('builds the browser and host-report URLs from the view url, with no hard-coded host', () => {
+    const html = readFileSync('dist/task-card.html', 'utf8');
+    expect(html).toContain('/browser/frame');
+    expect(html).toContain('/v1/connect/host-report');
+    expect(html).not.toMatch(/https:\/\/[a-z0-9.-]*parallelfrontier/i);
+  });
 });

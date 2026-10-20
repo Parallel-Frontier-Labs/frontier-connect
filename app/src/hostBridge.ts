@@ -1,5 +1,5 @@
 import { App } from '@modelcontextprotocol/ext-apps';
-import type { AnswerOutcome, Bridge, DeleteOutcome, LinkOutcome, ListOutcome } from './bridge';
+import type { AnswerOutcome, Bridge, DeleteOutcome, HostInfo, LinkOutcome, ListOutcome } from './bridge';
 import { parseList, type ListPayload } from './list';
 import { parsePayload, type TaskPayload } from './types';
 
@@ -26,6 +26,20 @@ function errorLine(r: { structuredContent?: unknown; content?: unknown } | undef
   return fallback;
 }
 
+const MODES = ['inline', 'fullscreen', 'pip'] as const;
+type Mode = (typeof MODES)[number];
+const modeOf = (v: unknown): Mode | undefined => MODES.find((m) => m === v);
+/** The modes the card itself supports, declared to the host at the handshake. */
+export const appCapabilities: { availableDisplayModes: Mode[] } = { availableDisplayModes: ['inline', 'fullscreen'] };
+
+type Ctx = {
+  theme?: string; displayMode?: unknown; availableDisplayModes?: unknown; platform?: unknown; containerDimensions?: unknown;
+} | null | undefined;
+const cap64 = (v: unknown): string | undefined => (typeof v === 'string' && v ? v.slice(0, 64) : undefined);
+const dim = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : undefined);
+const modesOf = (ctx: Ctx): string[] | undefined =>
+  Array.isArray(ctx?.availableDisplayModes) ? ctx.availableDisplayModes.filter((m): m is Mode => !!modeOf(m)) : undefined;
+
 /**
  * Adapter over the MCP Apps `App` class (@modelcontextprotocol/ext-apps 2.0.3).
  * Verified API: `new App(appInfo, capabilities?, options?)` (`options.autoResize`, default true,
@@ -34,10 +48,13 @@ function errorLine(r: { structuredContent?: unknown; content?: unknown } | undef
  * (defaults to a postMessage transport to the parent window), `app.callServerTool({ name, arguments })`
  * -> CallToolResult, `app.getHostCapabilities()?.serverTools` (the host proxies app tool calls),
  * `app.getHostContext()?.theme`, `app.onhostcontextchanged`, `app.openLink({ url })` -> `{ isError? }`
- * (`ui/open-link`; offered when `getHostCapabilities()?.openLinks` is set).
+ * (`ui/open-link`; offered when `getHostCapabilities()?.openLinks` is set),
+ * `app.requestDisplayMode({ mode })` -> `{ mode }` (the mode the host applied), `app.getHostVersion()`
+ * -> `{ name, version }`, host context `displayMode`, `availableDisplayModes`, `platform`,
+ * `containerDimensions`.
  */
 export function createHostBridge(
-  app: App = new App({ name: 'frontier-task', version: '0.2.0' }, {}, { autoResize: true }),
+  app: App = new App({ name: 'frontier-task', version: '0.2.0' }, appCapabilities, { autoResize: true }),
 ): Bridge {
   const listeners: ((p: TaskPayload) => void)[] = [];
   // The host can deliver the first tool result before the card registers its listener; keep the
@@ -67,15 +84,33 @@ export function createHostBridge(
   // MCP Apps hosts (Codex, ChatGPT, Claude) draw their own rounded, bordered frame around an
   // inline or pip view, and the host context has no "frame" hint; only fullscreen fills a bare
   // panel. So the card is embedded unless the host says fullscreen.
-  const embeddedOf = (ctx?: { displayMode?: unknown } | null): boolean => ctx?.displayMode !== 'fullscreen';
   const embeddedListeners: ((e: boolean) => void)[] = [];
-  app.onhostcontextchanged = (params: { theme?: string; displayMode?: unknown }) => {
+  const modeListeners: ((m: string) => void)[] = [];
+  const ctx = (): Ctx => app.getHostContext?.() as Ctx;
+  // The mode the host applied in answer to the card's own request, until the host context says
+  // otherwise (a host may answer the request without sending a context change).
+  let granted: Mode | null = null;
+  const displayMode = (): Mode => granted ?? modeOf(ctx()?.displayMode) ?? 'inline';
+  const embeddedOf = (m: Mode): boolean => m !== 'fullscreen';
+  // The last mode listeners heard about. Tracked here, not read back from the context, because the
+  // context is already merged with a change by the time the change is announced.
+  let last: Mode = displayMode();
+  const announce = (m: Mode, always = false) => {
+    const before = last;
+    last = m;
+    if (m !== before || always) for (const l of modeListeners) l(m);
+    if (embeddedOf(m) !== embeddedOf(before)) for (const l of embeddedListeners) l(embeddedOf(m));
+  };
+  app.onhostcontextchanged = (params: { theme?: string; displayMode?: unknown; availableDisplayModes?: unknown }) => {
     // The notification carries only the changed fields; fall back to the merged context.
     const t = params && 'theme' in params ? themeOf(params) : themeOf(app.getHostContext?.());
     for (const l of themeListeners) l(t);
+    const modes = !!params && 'availableDisplayModes' in params;
     if (params && 'displayMode' in params) {
-      const e = embeddedOf(params);
-      for (const l of embeddedListeners) l(e);
+      granted = null;
+      announce(modeOf(params.displayMode) ?? 'inline', modes);
+    } else if (modes) {
+      announce(displayMode(), true);
     }
   };
   const errorListeners: ((e: unknown) => void)[] = [];
@@ -85,6 +120,8 @@ export function createHostBridge(
   void Promise.resolve(app.connect())
     .then(() => {
       ready = true;
+      // The handshake brought the initial context: the starting point, not a change.
+      last = displayMode();
       for (const l of readyListeners) l();
     })
     .catch((e: unknown) => {
@@ -109,9 +146,55 @@ export function createHostBridge(
     onThemeChange: (cb) => {
       themeListeners.push(cb);
     },
-    embedded: () => embeddedOf(app.getHostContext?.()),
+    embedded: () => embeddedOf(displayMode()),
     onEmbeddedChange: (cb) => {
       embeddedListeners.push(cb);
+    },
+    displayModes: () => modesOf(ctx()),
+    displayMode,
+    async requestDisplayMode(mode) {
+      if (typeof app.requestDisplayMode !== 'function') return displayMode();
+      try {
+        const r = await app.requestDisplayMode({ mode });
+        const applied = modeOf(r?.mode);
+        if (!applied) return displayMode();
+        granted = applied;
+        announce(applied);
+        return applied;
+      } catch {
+        return displayMode();
+      }
+    },
+    onDisplayModeChange: (cb) => {
+      modeListeners.push(cb);
+    },
+    hostInfo(): HostInfo {
+      const c = ctx();
+      const info: HostInfo = {};
+      let v: { name?: unknown; version?: unknown } | undefined;
+      try {
+        v = app.getHostVersion?.() as typeof v;
+      } catch {
+        v = undefined;
+      }
+      const name = cap64(v?.name);
+      const version = cap64(v?.version);
+      if (name || version) info.host = { ...(name ? { name } : {}), ...(version ? { version } : {}) };
+      const platform = (['web', 'desktop', 'mobile'] as const).find((x) => x === c?.platform);
+      if (platform) info.platform = platform;
+      info.displayMode = displayMode();
+      const modes = modesOf(c);
+      if (modes) info.displayModes = modes.slice(0, 8);
+      const d = c?.containerDimensions && typeof c.containerDimensions === 'object' ? (c.containerDimensions as Record<string, unknown>) : null;
+      if (d) {
+        const box: NonNullable<HostInfo['container']> = {};
+        for (const k of ['width', 'height', 'maxWidth', 'maxHeight'] as const) {
+          const n = dim(d[k]);
+          if (n !== undefined) box[k] = n;
+        }
+        if (Object.keys(box).length) info.container = box;
+      }
+      return info;
     },
     onConnectError: (cb) => {
       errorListeners.push(cb);
@@ -181,6 +264,14 @@ export function createHostBridge(
       try {
         const r = await app.openLink({ url });
         return !r?.isError;
+      } catch {
+        return false;
+      }
+    },
+    async stopTask(taskId): Promise<boolean> {
+      try {
+        const r = await app.callServerTool({ name: 'frontier_stop_task', arguments: { task_id: taskId } });
+        return !!r && !r.isError;
       } catch {
         return false;
       }

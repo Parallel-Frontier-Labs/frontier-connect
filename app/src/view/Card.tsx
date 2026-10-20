@@ -1,8 +1,10 @@
-import { useRef, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { AnswerOutcome, Answers, Stale } from '../bridge';
 import { cardClass } from '../format';
 import type { Status, TaskPayload } from '../types';
 import { AnsweredView, type Answered } from './Answered';
+import { BrowserPreview, type BrowserApi } from './BrowserPreview';
+import { ControlView, SignInPanel } from './BrowserTakeover';
 import { Done } from './Done';
 import { Ended } from './Ended';
 import { FilesAsk } from './FilesAsk';
@@ -19,6 +21,25 @@ import { QuestionAsk } from './Ask';
 export interface AnswerApi {
   enabled: boolean;
   send(askId: string, answers: Answers): Promise<AnswerOutcome | Stale>;
+}
+
+/** How long the host gets to answer a display-mode request before the card goes on inline. */
+export const DISPLAY_MODE_WAIT_MS = 3000;
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    const t = setTimeout(() => resolve(null), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      () => { clearTimeout(t); resolve(null); },
+    );
+  });
+}
+
+/** The seq of the task's latest takeover event (0 when none): a new one means it needs the user again. */
+function latestTakeoverSeq(p: TaskPayload): number {
+  for (let i = p.events.length - 1; i >= 0; i--) if (p.events[i]!.kind === 'takeover') return p.events[i]!.seq;
+  return 0;
 }
 
 const NO_ANSWERS: AnswerApi = { enabled: false, send: async () => ({ kind: 'failed', message: '' }) };
@@ -73,6 +94,7 @@ export function Card({
   answer = NO_ANSWERS,
   download,
   onBack,
+  browser,
 }: {
   payload: TaskPayload;
   theme?: 'light' | 'dark';
@@ -83,6 +105,8 @@ export function Card({
   download?: DownloadApi;
   /** Opened from "Your Frontier tasks": a "← All tasks" bar returns to the list. */
   onBack?: () => void;
+  /** The task's cloud browser (frames, display modes): a live preview while the agent drives it. */
+  browser?: BrowserApi;
 }) {
   // The last answer sent from this card. It keeps the options locked ("Answered · continuing")
   // while the task picks it up, which the engine does asynchronously.
@@ -109,6 +133,75 @@ export function Card({
     return f;
   };
   const canSend = answer.enabled && !!ask?.ask_id;
+
+  // The task paused for the user in its browser, and the card can drive it: sign-in panel, then the
+  // control view (full screen when the host grants it, inline otherwise).
+  // The task waits on the user in its browser. A sign-in the card can drive (input, direct
+  // transport) gets Take over; otherwise the panel says where to continue: a form in the browser,
+  // or a host that cannot reach the browser, goes to Frontier.
+  const browserWait = !!browser && p.status === 'waiting_for_you' && p.browser?.state === 'waiting';
+  const transport = browser?.transport?.() ?? 'direct';
+  // A host that never let the card reach the server goes to Frontier; a direct path that dropped
+  // after working (a network blip) keeps the panel, with Take over waiting on the reconnect.
+  const takeover = browserWait && !p.browser?.form && !!browser?.input && transport !== 'blocked';
+  const reconnecting = transport === 'reconnecting';
+  const elsewhere: 'form' | 'host' | null = !browserWait || takeover ? null : p.browser?.form ? 'form' : 'host';
+  const [control, setControl] = useState(false);
+  // Resumed from this card: until the task picks it up, say so instead of offering the panel again.
+  // Tied to the takeover it answered, so a new takeover (the task needs the user again) shows.
+  const [resumedFor, setResumedFor] = useState<number | null>(null);
+  const takeoverSeq = latestTakeoverSeq(p);
+  const resumed = resumedFor !== null && resumedFor === takeoverSeq;
+  const leaving = useRef(false);
+  const alive = useRef(true);
+  const articleRef = useRef<HTMLElement>(null);
+  // Back from the control view: keyboard focus returns to Take over (or the card).
+  const [refocus, setRefocus] = useState(false);
+  useEffect(() => () => {
+    alive.current = false;
+  }, []);
+  const leave = (didResume: boolean) => {
+    if (leaving.current) return;
+    leaving.current = true;
+    setControl(false);
+    setRefocus(true);
+    if (didResume) {
+      setResumedFor(takeoverSeq);
+      browser?.refresh?.();
+    }
+    void browser?.requestDisplayMode('inline');
+  };
+  const takeOver = async () => {
+    if (!browser) return;
+    // Whatever the host answers, the control view opens: full screen when granted, inline when
+    // refused or when the host does not answer within DISPLAY_MODE_WAIT_MS.
+    await withTimeout(browser.requestDisplayMode('fullscreen'), DISPLAY_MODE_WAIT_MS);
+    if (!alive.current) return;
+    leaving.current = false;
+    setControl(true);
+  };
+  // Leave the control view when the task stops waiting (resumed elsewhere, finished, stopped).
+  useEffect(() => {
+    if (control && !takeover) leave(false);
+    if (!takeover) setResumedFor(null);
+  }, [takeover]);
+  // Focus after leaving the control view: Take over when the panel is back, else the card itself.
+  useEffect(() => {
+    if (!refocus || control) return;
+    setRefocus(false);
+    if (!articleRef.current?.querySelector('.fc-takeover')) articleRef.current?.focus();
+  }, [refocus, control]);
+  // The host left full screen on its own (its close button): back to the card.
+  const prevMode = useRef(browser?.mode);
+  useEffect(() => {
+    const was = prevMode.current;
+    prevMode.current = browser?.mode;
+    if (control && was === 'fullscreen' && browser?.mode !== 'fullscreen') {
+      leaving.current = true;
+      setControl(false);
+      setRefocus(true);
+    }
+  }, [browser?.mode]);
   const announcement = `Frontier task ${PILL.get(p.status) ?? 'Starting'}${showAnswered ? `. ${answered!.label}, continuing` : ''}.`;
 
   let body = null;
@@ -130,6 +223,17 @@ export function Card({
         <PausedSteps payload={p} />
       </div>
     );
+  } else if (takeover && browser && resumed) {
+    body = (
+      <div class="fc-body">
+        <p class="fc-note" role="status">Resuming the task…</p>
+        <PausedSteps payload={p} />
+      </div>
+    );
+  } else if (takeover && browser) {
+    body = <SignInPanel payload={p} api={browser} onTakeOver={() => void takeOver()} focus={refocus} reconnecting={reconnecting} />;
+  } else if (elsewhere && browser) {
+    body = <SignInPanel payload={p} api={browser} elsewhere={elsewhere} />;
   } else if (waiting && showAnswered) {
     body = (
       <div class="fc-body fc-body-tight">
@@ -152,12 +256,22 @@ export function Card({
           </div>
         ) : null}
         {p.plan.length ? <PlanProgress payload={p} /> : <NoPlan payload={p} />}
+        {browser && p.status === 'running' && p.browser?.state === 'live' ? <BrowserPreview site={p.browser.site} api={browser} /> : null}
       </>
     );
   }
 
+  if (control && takeover && browser) {
+    const full = browser.mode === 'fullscreen';
+    return (
+      <article class={`${cardClass(embedded)} fc-card-ctl${full ? ' fc-card-full' : ''}`} data-theme={theme} aria-label={`Frontier task: ${p.title || 'Frontier task'}, you're in control`}>
+        <ControlView payload={p} api={browser} fullscreen={full} onLeave={leave} />
+      </article>
+    );
+  }
+
   return (
-    <article class={cardClass(embedded)} data-theme={theme} aria-label={`Frontier task: ${p.title || 'Frontier task'}`}>
+    <article ref={articleRef} tabIndex={-1} class={cardClass(embedded)} data-theme={theme} aria-label={`Frontier task: ${p.title || 'Frontier task'}`}>
       {onBack ? (
         <div class="fc-backbar">
           <button type="button" class="fc-back" onClick={onBack}>

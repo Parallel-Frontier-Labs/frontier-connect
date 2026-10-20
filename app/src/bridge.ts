@@ -21,6 +21,15 @@ export type LinkOutcome = { kind: 'ok'; url: string; name: string } | { kind: 'f
 export type DownloadOutcome = { kind: 'opened' } | { kind: 'link'; url: string; name: string } | { kind: 'failed'; message: string };
 export type DeleteOutcome = { kind: 'deleted' } | { kind: 'refused'; reason: string } | { kind: 'failed'; message: string };
 
+/** What the card tells the server about the host (no user data): see Bridge.hostInfo. */
+export interface HostInfo {
+  host?: { name?: string; version?: string };
+  platform?: 'web' | 'desktop' | 'mobile';
+  displayModes?: string[];
+  displayMode?: string;
+  container?: { width?: number; height?: number; maxWidth?: number; maxHeight?: number };
+}
+
 export interface Bridge {
   /** Every tool result the host shows this card for (start_task, get_task, wait_task). */
   onPayload(cb: (p: TaskPayload) => void): void;
@@ -55,4 +64,18 @@ export interface Bridge {
   /** Ask the host to open `url` in the user's browser (MCP Apps `ui/open-link`). False when the
    * host has no link support or declined: the card then shows the link itself. */
   openLink(url: string): Promise<boolean>;
+  /** Display modes the host offers (MCP Apps `availableDisplayModes`); undefined when it does not say. */
+  displayModes?(): string[] | undefined;
+  /** The display mode the card is shown in now: 'inline' when the host does not say. */
+  displayMode?(): string;
+  /** Ask the host for a display mode. Resolves with the mode the host actually applied (which may
+   * be the current one when it refuses or fails); never rejects and never assumes the request was granted. */
+  requestDisplayMode?(mode: 'inline' | 'fullscreen' | 'pip'): Promise<string>;
+  /** The display mode, or the modes on offer, changed. Called with the current mode. */
+  onDisplayModeChange?(cb: (mode: string) => void): void;
+  /** Host name/version, platform, display modes and container size from the host context. No user data. */
+  hostInfo?(): HostInfo;
+  /** frontier_stop_task from the card: only ever called from the user's click on Stop task.
+   * True when the server accepted it. Never retried. */
+  stopTask?(taskId: string): Promise<boolean>;
 }
