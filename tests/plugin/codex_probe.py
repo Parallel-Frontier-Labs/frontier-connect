@@ -35,7 +35,7 @@ def main(root: str) -> int:
     problems = []
     if "frontier:frontier" not in skills:
         problems.append(f"skill missing (got {skills})")
-    if "frontier" not in names:
+    if "Frontier" not in names:
         problems.append(f"MCP server missing (got {names})")
     if not logo or not os.path.isfile(logo):
         problems.append(f"logo missing (got {logo})")

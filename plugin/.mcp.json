@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "frontier": {
+    "Frontier": {
       "type": "http",
       "url": "https://api.parallelfrontier.io/mcp"
     }
