@@ -147,6 +147,15 @@ export function TokensIcon() {
   );
 }
 
+export function CreditsIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="var(--faint-ink)" stroke-width="1.4" aria-hidden="true">
+      <circle cx="7" cy="7" r="5.2" />
+      <path d="M7 4.6v4.8M5.6 5.8h2.1a.9.9 0 0 1 0 1.2H6.3a.9.9 0 0 0 0 1.2h2.1" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  );
+}
+
 export function BookIcon() {
   return (
     <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="var(--faint-ink)" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">

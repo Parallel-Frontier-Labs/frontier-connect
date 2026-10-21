@@ -128,5 +128,15 @@ describe('Poller view access for the browser feed', () => {
     release();
     await vi.waitFor(() => expect(timers.map((t) => t.ms)).toEqual([5000]));
   });
-});
 
+  it('parses credits: a finite non-negative number, else null', () => {
+    expect(parsePayload({ ...base, credits: 12 })?.credits).toBe(12);
+    expect(parsePayload({ ...base, credits: 12.6 })?.credits).toBe(13);
+    expect(parsePayload({ ...base, credits: -1 })?.credits).toBeNull();
+    expect(parsePayload({ ...base, credits: 'x' })?.credits).toBeNull();
+    expect(parsePayload({ ...base, credits: NaN })?.credits).toBeNull();
+    expect(parsePayload({ ...base, credits: Infinity })?.credits).toBeNull();
+    expect(parsePayload({ ...base, credits: 1e300 })?.credits).toBeNull();
+    expect(parsePayload(base)?.credits).toBeNull();
+  });
+});

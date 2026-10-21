@@ -286,6 +286,30 @@ describe('done', () => {
     const b = render(<Card payload={mk({ status: 'done', usage })} />);
     b.getByText('106.3k tokens');
   });
+
+  it('shows credits first after the work time, then tokens', () => {
+    const { container, getByText } = render(
+      <Card payload={mk({ status: 'done', work_ms: 252000, credits: 1240,
+        usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, total_tokens: 12400 } })} />,
+    );
+    getByText('1,240 credits');
+    const metas = Array.from(container.querySelectorAll('.fc-foot .fc-meta')).map((n) => n.textContent);
+    expect(metas).toEqual(['4m 12s', '1,240 credits', '12.4k tokens']);
+    expect(container.querySelector('[title="Credits used"]')).not.toBeNull();
+  });
+
+  it('hides credits when the payload has none (null or an older server)', () => {
+    const a = render(<Card payload={mk({ status: 'done', credits: null })} />);
+    expect(a.queryByText(/credit/)).toBeNull();
+    a.unmount();
+    const b = render(<Card payload={mk({ status: 'done' })} />);
+    expect(b.queryByText(/credit/)).toBeNull();
+  });
+
+  it('never shows money words', () => {
+    const { container } = render(<Card payload={mk({ status: 'done', credits: 5 })} />);
+    expect(container.textContent).not.toMatch(/\$|usd|cost|price/i);
+  });
 });
 
 describe('stopped and failed', () => {

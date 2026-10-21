@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatEta, formatTokens, formatWork } from '../src/format';
+import { formatCredits, formatEta, formatTokens, formatWork } from '../src/format';
 
 describe('formatTokens', () => {
   it('prints small and thousand values', () => {
@@ -32,5 +32,21 @@ describe('formatEta', () => {
   it('rounds to minutes from 45 s', () => {
     expect(formatEta(45)).toBe('About 1 min left');
     expect(formatEta(240)).toBe('About 4 min left');
+  });
+});
+
+describe('formatCredits', () => {
+  it('is exact with a thousands separator below 10k, singular for one', () => {
+    expect(formatCredits(0)).toBe('0 credits');
+    expect(formatCredits(1)).toBe('1 credit');
+    expect(formatCredits(840)).toBe('840 credits');
+    expect(formatCredits(1_240)).toBe('1,240 credits');
+    expect(formatCredits(9_999)).toBe('9,999 credits');
+  });
+  it('switches to k at 10k and to M at 999.95k, never printing 1000.0k', () => {
+    expect(formatCredits(10_000)).toBe('10.0k credits');
+    expect(formatCredits(999_949)).toBe('999.9k credits');
+    expect(formatCredits(999_950)).toBe('1.0M credits');
+    expect(formatCredits(3_400_000)).toBe('3.4M credits');
   });
 });

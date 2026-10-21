@@ -48,6 +48,8 @@ export interface TaskPayload {
   task_id: string; status: Status; title: string; plan: PlanStep[]; sections: Section[]; live: string | null;
   estimate: { eta_s: number } | null; open_ask: OpenAsk | null; deliverables: Deliverable[];
   result: { summary: string; summary_type: string; takeaway: string | null } | null; work_ms: number;
+  /** Credits used so far, computed by the backend; null or absent when unknown (an older server). */
+  credits?: number | null;
   usage: Usage | null; events: TaskEvent[]; cursor: number; more: boolean; view?: View | null;
   /** The organization the connection runs tasks in (header line). */
   org?: string | null;
@@ -280,6 +282,7 @@ export function parsePayload(v: unknown): TaskPayload | null {
             : {}),
         }
       : null,
+    credits: typeof r.credits === 'number' && Number.isFinite(r.credits) && r.credits >= 0 && r.credits <= Number.MAX_SAFE_INTEGER ? Math.round(r.credits) : null,
     events: cleanEvents(r.events),
     cursor: num(r.cursor),
     more: r.more === true,

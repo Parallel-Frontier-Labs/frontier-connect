@@ -87,6 +87,14 @@ describe('hostile payloads', () => {
     expect(c.container.textContent).not.toMatch(/NaN|Infinity/);
   });
 
+  it('hostile credits never render NaN, Infinity or a negative figure', () => {
+    for (const credits of ['9', NaN, Infinity, -5, 1e300, {}, [3]]) {
+      const c = cardOf({ status: 'done', credits });
+      expect(c.container.textContent).not.toMatch(/credit|NaN|Infinity|-\d/);
+      c.unmount?.();
+    }
+  });
+
   it('structurally wrong collections do not crash the card', () => {
     const c = cardOf({ plan: 'x', sections: { a: 1 }, deliverables: 7, open_ask: 'x', result: 'x', usage: 3, view: 'x', events: 'x' });
     noMarkup(c);
