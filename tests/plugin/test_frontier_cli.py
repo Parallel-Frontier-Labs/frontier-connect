@@ -22,6 +22,7 @@ import tempfile
 import threading
 import unicodedata
 import unittest
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
@@ -299,6 +300,41 @@ class Tickets(unittest.TestCase):
                          "and try again.")
         self.assertEqual(fr.net_hint({"files.storage.example"}),
                          "Could not reach Frontier. Check the connection and try again.")
+
+    def test_proxy_refusing_frontier_says_which_setting_to_change(self):
+        # PFL-65: the AI app's egress proxy refuses the CONNECT to api.parallelfrontier.io. The
+        # helper names the one domain and where to allow it, instead of "check the connection".
+        class Refuse(BaseHTTPRequestHandler):
+            def do_CONNECT(self):  # noqa: N802
+                self.send_response(403, "Forbidden")
+                self.end_headers()
+
+            def log_message(self, *a):  # noqa: ANN002
+                pass
+
+        proxy = ThreadingHTTPServer(("127.0.0.1", 0), Refuse)
+        threading.Thread(target=proxy.serve_forever, daemon=True).start()
+        self.addCleanup(proxy.shutdown)
+        env = {k: v for k, v in os.environ.items() if k.lower() not in ("https_proxy", "no_proxy")}
+        env["HTTPS_PROXY"] = f"http://127.0.0.1:{proxy.server_address[1]}"
+        with tempfile.TemporaryDirectory() as root:
+            Path(root, "a.pdf").write_bytes(b"1")
+            r = subprocess.run([sys.executable, str(SCRIPT), "stage", "--ticket",
+                                f"https://api.parallelfrontier.io/v1/connect/t#{RAW}", "--root", root],
+                               capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(fr.NETWORK_BLOCKED, r.stderr)
+        for want in ("api.parallelfrontier.io", "Settings → Capabilities", "Admin settings → Capabilities"):
+            self.assertIn(want, fr.NETWORK_BLOCKED)
+        self.assertNotIn("Check the connection", r.stderr)
+
+    def test_plain_network_failure_keeps_the_connection_hint(self):
+        err = urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+        with mock.patch.object(fr, "_opener") as op:
+            op.return_value.open.side_effect = err
+            with self.assertRaises(fr.FrontierError) as ctx:
+                fr.ticket_call("https://api.parallelfrontier.io", RAW, "GET", "/files", None, False)
+        self.assertEqual(str(ctx.exception), fr.net_hint({"api.parallelfrontier.io"}))
 
     def test_production_ticket_parses(self):
         raw = fr.parse_ticket(f"https://api.parallelfrontier.io/v1/connect/t#{RAW}", None)
