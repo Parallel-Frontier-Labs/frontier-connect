@@ -57,7 +57,7 @@ WORKERS = 4
 TIMEOUT_S = 60
 MAX_JSON_BYTES = 32 * 1024 * 1024
 CHUNK = 1024 * 1024
-USER_AGENT = "frontier-plugin/0.1.8"
+USER_AGENT = "frontier-plugin/0.1.9"
 DEFAULT_MIME = "application/octet-stream"
 
 EXPIRED = ("This Frontier link has expired or was already used. Ask the assistant to request a "
@@ -68,9 +68,22 @@ PLAN_INACTIVE = ("Your Frontier plan is inactive, so Frontier cannot take files 
 NO_ACCESS = ("Frontier refused access for this account. Check that you are connected to Frontier "
              "with the right account, then ask again.")
 API_HOST = "api.parallelfrontier.io"
+# PFL-65: the AI app's egress proxy refused api.parallelfrontier.io. The one case where the helper
+# names a network setting: the user's own allowlist, and the only host they need to add.
+NETWORK_BLOCKED = ("This app's network settings block api.parallelfrontier.io, so files cannot "
+                   "reach Frontier from here. In Claude: Settings → Capabilities, add "
+                   "api.parallelfrontier.io to the allowed domains (on Claude Team or Enterprise, an "
+                   "org owner does this in Admin settings → Capabilities). Then ask again.")
 # Top-level names Frontier writes into a task's folder itself; the server refuses a manifest
 # that holds one, so the helper never sends them.
 RESERVED_TOP_FILES = frozenset({"folder-index.md", "context.md"})
+
+
+def _proxy_refused(exc: BaseException) -> bool:
+    """True when a proxy refused the tunnel (CONNECT answered 403 or 407): a policy denial of the
+    host, not a flaky connection."""
+    text = f"{exc} {getattr(exc, 'reason', '')}"
+    return "Tunnel connection failed: 403" in text or "Tunnel connection failed: 407" in text
 
 
 def net_hint(hosts: set[str]) -> str:
@@ -260,7 +273,9 @@ def ticket_call(origin: str, raw: str, method: str, sub: str, body: dict | None,
         if code >= 500:
             raise FrontierError(f"Frontier answered HTTP {code}; try again in a moment") from None
         raise FrontierError(f"Frontier refused the request (HTTP {code}).") from None
-    except (urllib.error.URLError, http.client.HTTPException, OSError, socket.timeout):
+    except (urllib.error.URLError, http.client.HTTPException, OSError, socket.timeout) as exc:
+        if _host(origin) == API_HOST and _proxy_refused(exc):
+            raise FrontierError(NETWORK_BLOCKED) from None
         raise FrontierError(net_hint({_host(origin)})) from None
 
 
