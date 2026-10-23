@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 describe('single-file build', () => {
@@ -61,5 +61,32 @@ describe('single-file build', () => {
     expect(html).toContain('/browser/frame');
     expect(html).toContain('/v1/connect/host-report');
     expect(html).not.toMatch(/https:\/\/[a-z0-9.-]*parallelfrontier/i);
+  });
+
+  it('writes the viewers as separate hashed files, none inlined, and no stray static files', () => {
+    const html = readFileSync('dist/task-card.html', 'utf8');
+    const manifest = JSON.parse(readFileSync('dist/static/manifest.json', 'utf8')) as Record<string, string>;
+    for (const n of ['sheet', 'pdf', 'docx']) {
+      expect(manifest[`viewer-${n}`]).toMatch(new RegExp(`^viewer-${n}\\.[0-9a-f]{12}\\.js$`));
+    }
+    expect(html).not.toContain('__frontierViewers=');
+    const listed = new Set([...Object.values(manifest), 'manifest.json']);
+    for (const f of readdirSync('dist/static')) expect(listed.has(f), f).toBe(true);
+  });
+
+  it('starts every viewer file with a notice banner naming each bundled component', () => {
+    const manifest = JSON.parse(readFileSync('dist/static/manifest.json', 'utf8')) as Record<string, string>;
+    const want: Record<string, string[]> = {
+      sheet: ['SheetJS Community Edition', 'Apache-2.0', 'SheetJS LLC', 'Apache License'],
+      pdf: ['PDF.js', 'Apache-2.0', 'Mozilla Foundation', 'Apache License', 'OpenJPEG', 'Universite catholique de Louvain', 'Emscripten'],
+      docx: ['mammoth', '@xmldom/xmldom', 'base64-js', 'buffer', 'dingbat-to-unicode', 'ieee754', 'isarray', 'jszip', 'pako', 'lop', 'option',
+        'process', 'underscore', 'xmlbuilder', 'Permission is hereby granted', 'Redistribution and use', 'Neither the name of Fair Oaks Labs', 'Zlib'],
+    };
+    for (const [n, names] of Object.entries(want)) {
+      const js = readFileSync(`dist/static/${manifest[`viewer-${n}`]}`, 'utf8');
+      expect(js.startsWith('/*!'), n).toBe(true);
+      const banner = js.slice(0, js.indexOf('*/'));
+      for (const c of names) expect(banner, `${n}: ${c}`).toContain(c);
+    }
   });
 });
