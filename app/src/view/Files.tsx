@@ -3,6 +3,7 @@ import type { DownloadOutcome, Stale } from '../bridge';
 import { LINK_FAILED } from '../hostBridge';
 import { allDirs, buildDelivery, findFile, firstFile, type TreeNode } from '../tree';
 import type { Deliverable, Saved } from '../types';
+import { NO_UPLOADS, readyText, UploadPanel, type UploadApi } from './UploadPanel';
 import { CloudIcon, DownloadIcon, FolderIcon, TickIcon, TreeChevron } from './icons';
 
 const EXT_TONE: Record<string, string> = {
@@ -74,7 +75,8 @@ function useDownloads(api: DownloadApi) {
  * When the Frontier plugin's helper has saved the files to the user's computer (`saved`), the box
  * says so ("Saved to your folder · <dir>") and the zip becomes a small "Download again (.zip)" link.
  */
-export function DeliveredFiles({ files, download = NO_DOWNLOADS, saved = null }: { files: Deliverable[]; download?: DownloadApi; saved?: Saved | null }) {
+export function DeliveredFiles({ files, download = NO_DOWNLOADS, saved = null, upload = NO_UPLOADS, taskId }:
+  { files: Deliverable[]; download?: DownloadApi; saved?: Saved | null; upload?: UploadApi; taskId?: string }) {
   const d = useMemo(() => buildDelivery(files), [files]);
   const dirs = useMemo(() => allDirs(d.nodes), [d]);
   const [open, setOpen] = useState<Set<string> | null>(null);
@@ -91,6 +93,23 @@ export function DeliveredFiles({ files, download = NO_DOWNLOADS, saved = null }:
   const dl = useDownloads(download);
   const folderBusy = dl.busy.has('');
   const note = dl.note;
+  const [adding, setAdding] = useState(false);
+  const [added, setAdded] = useState<string | null>(null);
+  const announced = useRef(new Set<string>());
+  const telling = useRef(false);
+  const onAdded = async (paths: string[]) => {
+    const fresh = paths.filter((p) => !announced.current.has(p));
+    if (!taskId || telling.current || !fresh.length) return;
+    telling.current = true;
+    try {
+      const text = readyText('more', taskId, fresh);
+      const told = await upload.tell(text);
+      fresh.forEach((p) => announced.current.add(p));
+      setAdded(told ? 'Sent. Ask for the follow-up in the chat.' : `Sent. Tell the chat: ${text}`);
+    } finally {
+      telling.current = false;
+    }
+  };
   return (
     <section class="fc-files" aria-label="Files">
       {saved ? (
@@ -165,6 +184,13 @@ export function DeliveredFiles({ files, download = NO_DOWNLOADS, saved = null }:
           </span>
         ) : null}
       </div>
+      {upload.enabled && taskId ? (
+        <>
+          {adding ? <UploadPanel taskId={taskId} api={upload} onSent={(p) => void onAdded(p)} />
+            : <button type="button" class="fc-toggle" aria-label="Add files to this task" onClick={() => setAdding(true)}>Add files</button>}
+          {added ? <p class="fc-note" role="status">{added}</p> : null}
+        </>
+      ) : null}
       <div class="fc-treebox">
         <ul class="fc-tree" aria-label="Delivered files">
           <Rows nodes={d.nodes} depth={0} nested={d.nested} openSet={openSet} selected={selected?.key ?? null} onToggle={toggle} onSelect={setPicked}

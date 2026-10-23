@@ -9,6 +9,7 @@ function rig(theme: 'light' | 'dark' = 'light', tools = false, answer: Bridge['a
   let onReady: () => void = () => {};
   let onTheme: (t: 'light' | 'dark') => void = () => {};
   let onErr: (e: unknown) => void = () => {};
+  let onAdd: (p: any) => void = () => {};
   let cur = theme;
   const bridge: Bridge = {
     onPayload: (cb) => (onPayload = cb),
@@ -20,6 +21,9 @@ function rig(theme: 'light' | 'dark' = 'light', tools = false, answer: Bridge['a
     onReady: (cb) => (onReady = cb),
     answer: vi.fn(answer),
     onList: () => {},
+    onAddFiles: (cb) => (onAdd = cb),
+    uploadTicket: async () => ({ kind: 'failed', message: '' }) as any,
+    sendMessage: async () => true,
     listTasks: async () => ({ kind: 'failed', message: '' }),
     deleteTask: async () => ({ kind: 'failed', message: '' }),
     fileLink: async () => ({ kind: 'failed', message: '' }),
@@ -31,6 +35,7 @@ function rig(theme: 'light' | 'dark' = 'light', tools = false, answer: Bridge['a
     theme: (t: 'light' | 'dark') => ((cur = t), onTheme(t)),
     fail: (e: unknown) => onErr(e),
     ready: () => onReady(),
+    addFiles: (p: unknown) => onAdd(p),
   };
 }
 
@@ -46,6 +51,16 @@ afterEach(() => {
 });
 
 describe('Root', () => {
+  it('shows the Add files view when a frontier_add_files result arrives', () => {
+    const r = rig('light', true);
+    render(<Root makeBridge={() => r.bridge} />);
+    act(() => r.addFiles({ view: 'add_files', task_id: 'task-9', instruction: 'Map it', existing: false }));
+    act(() => r.ready());
+    expect(screen.getByRole('heading', { name: 'Add files for Frontier' })).toBeTruthy();
+    expect(screen.getByText('Map it')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Add folder' })).toBeTruthy();
+  });
+
   it('updates data-theme when the host theme changes', () => {
     const r = rig('light');
     render(<Root makeBridge={() => r.bridge} />);

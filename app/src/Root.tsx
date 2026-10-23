@@ -8,6 +8,10 @@ import { BrowserFeed, postInput, sendHostReport, type FrameSource } from './brow
 import type { BrowserApi, Transport } from './view/BrowserPreview';
 import { Poller } from './poller';
 import { Card, type AnswerApi } from './view/Card';
+import { AddFiles } from './view/AddFiles';
+import { NO_UPLOADS, type UploadApi } from './view/UploadPanel';
+import type { AddFilesPayload } from './upload/addFiles';
+import { sendFiles } from './upload/transfer';
 import type { DownloadApi } from './view/Files';
 import { TaskList, type ListActions } from './view/TaskList';
 import type { TaskPayload } from './types';
@@ -39,10 +43,11 @@ const STALE: Stale = { kind: 'stale' };
  * card moved on is dropped; and every result passes the `deleted` filter, so a task deleted from
  * the card never comes back from a late read.
  */
-type Mode = { kind: 'task'; fromList: boolean } | { kind: 'list' } | { kind: 'deleted'; fromList: boolean };
+type Mode = { kind: 'task'; fromList: boolean } | { kind: 'list' } | { kind: 'add' } | { kind: 'deleted'; fromList: boolean };
 
 export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: () => Bridge }) {
   const [payload, setPayload] = useState<TaskPayload | null>(null);
+  const [add, setAdd] = useState<AddFilesPayload | null>(null);
   const [list, setListState] = useState<ListPayload | null>(null);
   const [mode, setMode] = useState<Mode>({ kind: 'task', fromList: false });
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
@@ -121,7 +126,7 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
         if (!gens.current(pollTag.current)) return;
         if (deleted.has(next.task_id)) {
           p.stop();
-          setMode((m) => ({ kind: 'deleted', fromList: m.kind !== 'list' && m.fromList }));
+          setMode((m) => ({ kind: 'deleted', fromList: m.kind !== 'list' && m.kind !== 'add' && m.fromList }));
           return;
         }
         taskRef.current = next.task_id;
@@ -149,6 +154,13 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
       setListEpoch((e) => e + 1);
       setList(next);
       setMode({ kind: 'list' });
+    });
+    bridge.onAddFiles?.((next) => {
+      gens.bumpView();
+      setTheme(bridge.theme());
+      p.stop();
+      setAdd(next);
+      setMode({ kind: 'add' });
     });
     bridge.onThemeChange(setTheme);
     const frame = () => setEmbedded(bridge.embedded ? bridge.embedded() : true);
@@ -234,6 +246,17 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
     }),
     [canAnswer],
   );
+
+  const upload: UploadApi = useMemo(() => {
+    const b = bridgeRef.current;
+    if (!canAnswer || !b?.uploadTicket) return NO_UPLOADS;
+    return {
+      enabled: true,
+      send: (taskId, files, onProgress, instruction) =>
+        sendFiles(files, { fetch: (...a) => fetch(...a), ticket: () => b.uploadTicket!(taskId, instruction) }, onProgress),
+      tell: (text) => (b.sendMessage ? b.sendMessage(text) : Promise.resolve(false)),
+    };
+  }, [canAnswer]);
 
   /** The Poller's view token, for the browser frame feed and input. */
   const frameSource = (): FrameSource | null => {
@@ -337,6 +360,7 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
   };
 
   shownTask.current = mode.kind === 'task' && payload ? payload.task_id : null;
+  if (mode.kind === 'add' && add) return <AddFiles key={add.task_id} add={add} api={upload} theme={theme} embedded={embedded} />;
   if (mode.kind === 'list' && list) return <TaskList key={listEpoch} list={list} theme={theme} embedded={embedded} actions={actions} />;
   if (mode.kind === 'deleted') {
     return (
@@ -352,7 +376,7 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
   }
   if (payload && mode.kind === 'task') {
     return (
-      <Card key={payload.task_id} payload={payload} theme={theme} embedded={embedded} answer={answer} download={download} browser={browser}
+      <Card key={payload.task_id} payload={payload} theme={theme} embedded={embedded} answer={answer} download={download} browser={browser} upload={upload}
         onBack={mode.fromList && list ? back : undefined} />
     );
   }

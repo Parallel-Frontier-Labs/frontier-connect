@@ -38,17 +38,21 @@ unsure, continue. In a new chat where the user refers to earlier work, find that
 
 1. **Files first.** With the Frontier plugin, follow its `frontier` skill: it uploads a whole
    folder through one ticket and saves delivered files back with `frontier_request_download`.
-   Without it, call `frontier_request_upload` with `files`, then PUT each file to its `put_url`.
-2. **Start.** Call `frontier_start_task` with the user's request, the uploaded file names (and
-   `upload_id` set to the `task_id` the upload returned), and any playbook skills as
-   `playbook/skill`. Set `may_ask` to true if the user is around to answer questions.
+   Without it (or when its helper cannot reach Frontier), call `frontier_add_files` with the
+   user's request: the user picks the files or a folder in the card, and the card posts a message
+   with the `upload_id` once they are in. Do not upload the files yourself.
+2. **Start.** Call `frontier_start_task` with the user's request, `upload_id` set to the
+   `upload_id` from the card's message (or, with the plugin, the `task_id` the upload returned;
+   the card needs no file names), and any playbook skills as `playbook/skill`. Set `may_ask` to true if the user is around to answer questions.
 3. **Keep the task card visible.** It updates live.
 4. **Follow.** Call `frontier_wait_task` with the returned cursor. Tell the user about notable
    updates: a new step, a question, files ready, done.
 5. **Questions and forms.** The user can answer right in the task card. Call `frontier_answer`
    only when the user has clearly told you what to choose, with the `ask_id` from the task and
    their answer. Otherwise ask the user. Never fill in a form the user should own: the card lets
-   them answer it. If the result says `accepted: false`, relay its one-line reason.
+   them answer it. If the result says `accepted: false`, relay its one-line reason. When Frontier
+   asks for a file, the user adds it in the card, which then posts a message; continue the task
+   with `frontier_continue_task`.
 6. **Steering.** If the user wants to change a running task (skip a section, change focus), call
    `frontier_steer` with their words. Do not start a new task for it.
 7. **Done.** Point the user to the deliverables by name. Without the plugin, the user can download
@@ -57,9 +61,10 @@ unsure, continue. In a new chat where the user refers to earlier work, find that
 8. **Follow-ups.** When the user asks for more (a change, an extra section, another file), call
    `frontier_continue_task` with the chat's `task_id` and their words. It keeps the same files,
    history and record; the card shows "Follow-up · turn N". `frontier_continue_task` takes no
-   skills: follow-ups keep the skills chosen when the task started. New files for it go through
-   `frontier_request_upload` with that `task_id`. If the task is still running, the result says
-   `accepted: false`: use `frontier_steer` instead.
+   skills: follow-ups keep the skills chosen when the task started. New files for it: with the
+   Frontier plugin, follow its `frontier` skill; otherwise call `frontier_add_files` with the
+   chat's `task_id`, and continue with `frontier_continue_task` after the card's message. If the
+   task is still running, the result says `accepted: false`: use `frontier_steer` instead.
 
 To cancel, call `frontier_stop_task`.
 

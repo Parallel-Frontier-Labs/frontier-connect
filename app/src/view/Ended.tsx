@@ -1,5 +1,6 @@
 import type { TaskEvent, TaskPayload } from '../types';
 import { DeliveredFiles, type DownloadApi } from './Files';
+import type { UploadApi } from './UploadPanel';
 import { AlertIcon, DoneDot, FailedDot, NotRunDot } from './icons';
 import { currentIndex, doneCount } from './Plan';
 
@@ -63,7 +64,7 @@ function Steps({ list, foldAfterFailure }: { list: Item[]; foldAfterFailure: boo
 }
 
 /** Stopped or failed: one line on why, the steps with not-run markers, and what to do next. */
-export function Ended({ payload: p, download }: { payload: TaskPayload; download?: DownloadApi }) {
+export function Ended({ payload: p, download, upload }: { payload: TaskPayload; download?: DownloadApi; upload?: UploadApi }) {
   const failed = p.status === 'error';
   const list = items(p, failed);
   const total = p.plan.length;
@@ -83,7 +84,7 @@ export function Ended({ payload: p, download }: { payload: TaskPayload; download
         <p class="fc-reason">{`Stopped${after}.${p.deliverables.length ? '' : ' Nothing was delivered.'}`}</p>
       )}
       <Steps list={list} foldAfterFailure={failed} />
-      {p.deliverables.length ? <DeliveredFiles files={p.deliverables} download={download} saved={p.saved} /> : null}
+      {p.deliverables.length ? <DeliveredFiles files={p.deliverables} download={download} saved={p.saved} upload={upload} taskId={p.task_id} /> : null}
       <div class="fc-muted fc-next">{failed ? 'Ask in the chat to try again.' : 'Ask in the chat to start it again.'}</div>
     </div>
   );

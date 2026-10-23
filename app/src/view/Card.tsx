@@ -16,6 +16,7 @@ import { SourceChip } from './TaskList';
 import { NoPlan } from './Sections';
 import { PausedSteps, PlanProgress, progressKey } from './Plan';
 import { QuestionAsk } from './Ask';
+import type { UploadApi } from './UploadPanel';
 
 /** How the card answers: through the host's app tool call, when the host offers one. */
 export interface AnswerApi {
@@ -95,6 +96,7 @@ export function Card({
   download,
   onBack,
   browser,
+  upload,
 }: {
   payload: TaskPayload;
   theme?: 'light' | 'dark';
@@ -103,6 +105,8 @@ export function Card({
   answer?: AnswerApi;
   /** Download buttons for the delivered files (hosts that forward the card's tool calls). */
   download?: DownloadApi;
+  /** Card uploads: the ask for a file and the finished-task Files section. */
+  upload?: UploadApi;
   /** Opened from "Your Frontier tasks": a "← All tasks" bar returns to the list. */
   onBack?: () => void;
   /** The task's cloud browser (frames, display modes): a live preview while the agent drives it. */
@@ -206,14 +210,14 @@ export function Card({
 
   let body = null;
   if (terminal) {
-    body = p.status === 'done' ? <Done payload={p} download={download} /> : <Ended payload={p} download={download} />;
+    body = p.status === 'done' ? <Done payload={p} download={download} upload={upload} /> : <Ended payload={p} download={download} upload={upload} />;
   } else if (waiting && ask && !lockedAsk) {
     const send = (answers: Answers) => answer.send(ask.ask_id!, answers);
     const askView =
       ask.kind === 'form' ? (
         <FormAsk key={ask.ask_id} ask={ask} canSend={canSend} send={send} onSent={onSent} />
       ) : ask.kind === 'files' ? (
-        <FilesAsk key={ask.ask_id} ask={ask} canSend={canSend} send={send} onSent={onSent} />
+        <FilesAsk key={ask.ask_id} ask={ask} taskId={p.task_id} upload={upload} canSend={canSend} send={send} onSent={onSent} />
       ) : (
         <QuestionAsk key={ask.ask_id} ask={ask} canSend={canSend} send={send} onSent={onSent} />
       );

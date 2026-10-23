@@ -1,5 +1,7 @@
 import type { ListPayload, ListStatus, Source } from './list';
 import type { TaskPayload } from './types';
+import type { AddFilesPayload } from './upload/addFiles';
+import type { TicketResult } from './upload/transfer';
 
 /** The answer value frontier_answer takes: a question's Answer list or a form submission. */
 export type Answers = Record<string, unknown>[] | { values: Record<string, unknown> } | { deferred: true };
@@ -78,4 +80,10 @@ export interface Bridge {
   /** frontier_stop_task from the card: only ever called from the user's click on Stop task.
    * True when the server accepted it. Never retried. */
   stopTask?(taskId: string): Promise<boolean>;
+  /** frontier_add_files tool results: the card's "Add files" view for a task (new or existing). */
+  onAddFiles?(cb: (a: AddFilesPayload) => void): void;
+  /** frontier_request_upload (no `files`) from the card: one upload ticket for `taskId`. */
+  uploadTicket?(taskId: string, instruction?: string): Promise<TicketResult>;
+  /** Post `text` into the chat as the user (MCP Apps `ui/message`). False when the host cannot. */
+  sendMessage?(text: string): Promise<boolean>;
 }
