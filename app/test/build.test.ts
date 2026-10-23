@@ -12,19 +12,28 @@ describe('single-file build', () => {
     expect(html).toContain('id="root"');
   });
 
-  it('embeds Public Sans 400/600/700 and IBM Plex Mono 400 as data URLs, with the font notice', () => {
+  it('loads the fonts from the static base, keeps the font notice, and writes the font files', () => {
     const html = readFileSync('dist/task-card.html', 'utf8');
-    for (const w of [400, 600, 700]) expect(html).toMatch(new RegExp(`font-family:'Public Sans';font-style:normal;font-weight:${w};[^}]*url\\(data:font/woff2;base64,`));
-    expect(html).toMatch(/font-family:'IBM Plex Mono';font-style:normal;font-weight:400;[^}]*url\(data:font\/woff2;base64,/);
-    // OFL 1.1 condition 2: every copy carries the copyright lines and the license text.
+    expect(html).not.toMatch(/data:font\//);
+    expect(html).toContain('data-static="__FRONTIER_STATIC__"');
+    const manifest = JSON.parse(readFileSync('dist/static/manifest.json', 'utf8')) as Record<string, string>;
+    for (const [name, w] of [['public-sans-400', 400], ['public-sans-600', 600], ['public-sans-700', 700]] as const) {
+      expect(manifest[name]).toMatch(new RegExp(`^${name}\\.[0-9a-f]{12}\\.woff2$`));
+      expect(html).toMatch(new RegExp(`font-family:'Public Sans';font-style:normal;font-weight:${w};[^}]*url\\(__FRONTIER_STATIC__/${manifest[name]!.replace(/\./g, '\\.')}\\)`));
+      expect(statSync(`dist/static/${manifest[name]}`).size).toBeGreaterThan(1000);
+    }
+    expect(manifest['ibm-plex-mono-400']).toMatch(/^ibm-plex-mono-400\.[0-9a-f]{12}\.woff2$/);
+    expect(manifest['OFL-1.1']).toMatch(/^OFL-1\.1\.[0-9a-f]{12}\.txt$/);
     const ofl = readFileSync('LICENSES/OFL-1.1.txt', 'utf8');
+    expect(html).toContain(ofl.split('\n')[0]);
+    // OFL 1.1 condition 2: every copy carries the copyright lines and the license text.
     expect(html).toContain(ofl);
     expect(html).toContain('SIL OPEN FONT LICENSE Version 1.1');
     expect(html).toContain('PERMISSION & CONDITIONS');
     expect(html).toContain('Copyright 2015 The Public Sans Project Authors');
     expect(html).toContain('Copyright 2017 IBM Corp.');
     const css = /<style>([\s\S]*?)<\/style>/.exec(html)![1]!;
-    expect(css).not.toMatch(/url\((?!data:)/);
+    expect(css).not.toMatch(/url\((?!__FRONTIER_STATIC__\/)/);
   });
 
   // Any new runtime URL (a new dependency, a hard-coded endpoint) must be reviewed and added here.
