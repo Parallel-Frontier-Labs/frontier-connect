@@ -530,3 +530,16 @@ button:disabled { cursor: default; }
 .fc-upl-list li { font-size: 12px; padding: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fc-upload .fc-secondary { gap: 6px; }
 .fc-drop[aria-disabled=true] { opacity: .5; }
+
+.fc-pv { display: flex; flex-direction: column; min-height: 0; height: 100%; border-left: 1px solid var(--input); }
+.fc-pv-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--input); }
+.fc-pv-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.fc-pv-body { flex: 1; min-height: 0; overflow: auto; padding: 14px; }
+.fc-pv-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.fc-pv-grid table { border-collapse: collapse; font-size: 12.5px; }
+.fc-pv-grid td { border: 1px solid var(--input); padding: 3px 8px; white-space: nowrap; }
+.fc-pv-pdf canvas, .fc-pv-img { display: block; max-width: 100%; margin: 0 auto 12px; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+.fc-pv-text { white-space: pre-wrap; font-family: var(--mono); font-size: 12.5px; margin: 0; }
+.fc-pv-doc img { max-width: 100%; }
+.fc-pv-body:has(> .fc-pv-frame) { padding: 0; overflow: hidden; }
+.fc-pv-frame { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
