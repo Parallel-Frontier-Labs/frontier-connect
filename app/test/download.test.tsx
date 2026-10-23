@@ -5,6 +5,7 @@ import type { Bridge, LinkOutcome } from '../src/bridge';
 import { Generations } from '../src/generation';
 import { createHostBridge, LINK_FAILED } from '../src/hostBridge';
 import { OPEN_LINK_WAIT_MS, Root } from '../src/Root';
+import { DeliveredFiles } from '../src/view/Files';
 import { parsePayload, type TaskPayload } from '../src/types';
 
 afterEach(cleanup);
@@ -278,5 +279,32 @@ describe('host bridge file links', () => {
     const none = fakeApp({ getHostCapabilities: vi.fn(() => ({ serverTools: {} })) });
     expect(await createHostBridge(none).openLink(URL1)).toBe(false);
     expect(none.openLink).not.toHaveBeenCalled();
+  });
+});
+
+describe('add files to a delivered task', () => {
+  const pick = (name: string) => {
+    const input = document.querySelector<HTMLInputElement>('input[multiple]:not([webkitdirectory])')!;
+    Object.defineProperty(input, 'files', { value: [new File(['x'], name)], configurable: true });
+    fireEvent.change(input);
+  };
+  const sendClick = () => act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Send to Frontier' })); });
+  it('offers Add files, tells the chat, and announces only new files in a second round', async () => {
+    const tell = vi.fn(async (_t: string) => true);
+    const send = vi.fn(async (_t: string, files: any[]) => ({ sent: files.map((f) => f.path), failed: [], error: null }));
+    const upload = { enabled: true, send, tell };
+    render(<DeliveredFiles files={[{ name: 'a.xlsx', path: 'a.xlsx' }]} upload={upload} taskId="task-1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add files to this task' }));
+    pick('n.pdf');
+    await sendClick();
+    expect(tell).toHaveBeenLastCalledWith('I added 1 new file to the Frontier task task-1 (n.pdf). Continue the Frontier task.');
+    pick('m.pdf');
+    await sendClick();
+    expect(tell).toHaveBeenCalledTimes(2);
+    expect(tell).toHaveBeenLastCalledWith('I added 1 new file to the Frontier task task-1 (m.pdf). Continue the Frontier task.');
+  });
+  it('shows no Add files without uploads', () => {
+    render(<DeliveredFiles files={[{ name: 'a.xlsx', path: 'a.xlsx' }]} taskId="task-1" />);
+    expect(screen.queryByRole('button', { name: 'Add files to this task' })).toBeNull();
   });
 });

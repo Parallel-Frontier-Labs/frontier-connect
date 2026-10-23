@@ -1,6 +1,7 @@
-import { act, cleanup, fireEvent, render } from '@testing-library/preact';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AnswerOutcome } from '../src/bridge';
+import { FilesAsk } from '../src/view/FilesAsk';
 import { Card, type AnswerApi } from '../src/view/Card';
 import { parsePayload, type OpenAsk, type TaskPayload } from '../src/types';
 
@@ -398,5 +399,22 @@ describe('announcements and focus', () => {
     rerender(<Card payload={mk({ status: 'done' })} answer={answer} />);
     expect(container.querySelector('[aria-live="polite"]')).toBe(live);
     expect(live.textContent).toBe('Frontier task Done.');
+  });
+});
+
+describe('files ask uploads', () => {
+  it('lets the user add the files Frontier asked for, then tells the chat', async () => {
+    const tell = vi.fn(async (_t: string) => true);
+    const upload = { enabled: true, send: vi.fn(async (_t: string, files: any[]) => ({ sent: files.map((f) => f.path), failed: [], error: null })), tell };
+    render(<FilesAsk ask={{ ask_id: 'a1', kind: 'files', text: 'Upload the 2023 statements' }} taskId="task-1" canSend send={vi.fn()} onSent={() => {}} upload={upload} />);
+    const input = document.querySelector<HTMLInputElement>('input[multiple]:not([webkitdirectory])')!;
+    Object.defineProperty(input, 'files', { value: [new File(['x'], '2023.pdf')], configurable: true });
+    fireEvent.change(input);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Send to Frontier' })); });
+    await flush();
+    expect(tell).toHaveBeenCalledTimes(1);
+    expect(tell).toHaveBeenCalledWith('I added the file Frontier asked for (2023.pdf) to task task-1. Continue the Frontier task.');
+    expect(screen.getByRole('status').textContent).toContain('Sent');
+    expect(screen.getByRole('button', { name: 'Skip' })).toBeTruthy();
   });
 });

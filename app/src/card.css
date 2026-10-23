@@ -523,3 +523,10 @@ button:disabled { cursor: default; }
 .fc-back:hover { background: var(--soft); }
 .fc-backbar + .fc-head { padding-top: 16px; }
 .fc-more-failed { display: inline-flex; align-items: center; gap: 10px; }
+
+.fc-upload { display: flex; flex-direction: column; gap: 10px; }
+.fc-drop { border: 1px dashed var(--input); border-radius: 12px; padding: 12px; text-align: center; }
+.fc-upl-list ul { list-style: none; margin: 4px 0; padding: 0; max-height: 180px; overflow: auto; }
+.fc-upl-list li { font-size: 12px; padding: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fc-upload .fc-secondary { gap: 6px; }
+.fc-drop[aria-disabled=true] { opacity: .5; }

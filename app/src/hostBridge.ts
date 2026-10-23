@@ -1,11 +1,14 @@
 import { App } from '@modelcontextprotocol/ext-apps';
 import type { AnswerOutcome, Bridge, DeleteOutcome, HostInfo, LinkOutcome, ListOutcome } from './bridge';
+import { parseAddFiles, type AddFilesPayload } from './upload/addFiles';
+import type { TicketResult } from './upload/transfer';
 import { parseList, type ListPayload } from './list';
 import { parsePayload, type TaskPayload } from './types';
 
 export const SEND_FAILED = "Couldn't send your answer. Try again, or reply in the chat.";
 export const LIST_FAILED = "Couldn't load your tasks. Try again, or ask in the chat.";
 export const DELETE_FAILED = "Couldn't delete the task. Try again.";
+export const UPLOAD_FAILED = "Couldn't start the upload. Try again.";
 export const LINK_FAILED = "Couldn't prepare the download. Try again.";
 
 /** Only an https URL is ever opened or shown as a link (never javascript:, data: or the like). */
@@ -62,11 +65,22 @@ export function createHostBridge(
   let latest: TaskPayload | null = null;
   const listListeners: ((l: ListPayload) => void)[] = [];
   let latestList: ListPayload | null = null;
+  const addListeners: ((a: AddFilesPayload) => void)[] = [];
+  let latestAdd: AddFilesPayload | null = null;
   // Handlers must be set before connect() so the first tool result is not missed.
   app.ontoolresult = (result: { structuredContent?: unknown }) => {
+    const add = parseAddFiles(result?.structuredContent);
+    if (add) {
+      latestAdd = add;
+      latest = null;
+      latestList = null;
+      for (const l of addListeners) l(add);
+      return;
+    }
     const list = parseList(result?.structuredContent);
     if (list) {
       latestList = list;
+      latestAdd = null;
       latest = null;
       for (const l of listListeners) l(list);
       return;
@@ -75,6 +89,7 @@ export function createHostBridge(
     if (sc) {
       latest = sc;
       latestList = null;
+      latestAdd = null;
       for (const l of listeners) l(sc);
     }
   };
@@ -208,6 +223,33 @@ export function createHostBridge(
     onList: (cb) => {
       listListeners.push(cb);
       if (latestList) cb(latestList);
+    },
+    onAddFiles: (cb) => {
+      addListeners.push(cb);
+      if (latestAdd) cb(latestAdd);
+    },
+    async uploadTicket(taskId, instruction): Promise<TicketResult> {
+      let r: Awaited<ReturnType<App['callServerTool']>> | undefined;
+      try {
+        r = await app.callServerTool({
+          name: 'frontier_request_upload',
+          arguments: instruction ? { task_id: taskId, instruction } : { task_id: taskId },
+        });
+      } catch {
+        return { kind: 'failed', message: UPLOAD_FAILED };
+      }
+      if (!r || r.isError) return { kind: 'failed', message: errorLine(r, UPLOAD_FAILED) };
+      const url = safeHttps((r.structuredContent as { ticket_url?: unknown } | undefined)?.ticket_url);
+      return url ? { kind: 'ok', url } : { kind: 'failed', message: UPLOAD_FAILED };
+    },
+    async sendMessage(text): Promise<boolean> {
+      if (!app.getHostCapabilities?.()?.message || typeof app.sendMessage !== 'function') return false;
+      try {
+        const r = await app.sendMessage({ role: 'user', content: [{ type: 'text', text }] });
+        return !r?.isError;
+      } catch {
+        return false;
+      }
     },
     async listTasks(q): Promise<ListOutcome> {
       const args: Record<string, unknown> = { days: q.days };

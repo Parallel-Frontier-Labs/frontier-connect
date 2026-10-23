@@ -24,7 +24,10 @@ The helper needs network access to `api.parallelfrontier.io` only: files move th
 - If the helper says it could not reach Frontier, tell the user Frontier could not take the files
   from here, and offer to carry on without Frontier (rule 8).
 - If the helper says this app's network settings block api.parallelfrontier.io, relay its message
-  to the user as written: it names the one setting to change. Do not try other ways around it.
+  to the user as written, and offer the other way: call `frontier_add_files` with the user's
+  request (and the chat's `task_id`, if there is one), so they pick the files in the Frontier
+  card. Then wait for their message that the files are ready, then call `frontier_start_task`
+  with that `upload_id` (or `frontier_continue_task` if the chat already has a Frontier task).
 
 It prints JSON on stdout and short lines for the user on stderr. Exit codes: 0 done, 1 Frontier
 or the network refused (relay the message; retry at most once), 2 a usage problem (fix the command), 3 some files
