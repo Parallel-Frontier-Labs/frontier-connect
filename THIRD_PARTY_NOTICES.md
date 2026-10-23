@@ -1,9 +1,11 @@
 # Third-party notices
 
-The built task card (`dist/task-card.html`) embeds the font files listed below. They are not
-covered by this repository's Apache-2.0 license; each is licensed under the SIL Open Font License,
-Version 1.1. The license text, with both copyright lines, is in
-[LICENSES/OFL-1.1.txt](LICENSES/OFL-1.1.txt), and the build writes it in full into the card.
+The built task card (`dist/task-card.html`) loads the font files listed below as separate files
+served next to it (`dist/static/`, with `OFL-1.1.<hash>.txt` beside them) instead of embedding them.
+They are not covered by this repository's Apache-2.0 license; each is licensed under the SIL Open
+Font License, Version 1.1. The license text, with both copyright lines, is in
+[LICENSES/OFL-1.1.txt](LICENSES/OFL-1.1.txt); the build also keeps it in full in a comment in the
+card.
 
 ## Public Sans
 
