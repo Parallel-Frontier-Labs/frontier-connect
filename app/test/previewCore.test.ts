@@ -105,6 +105,20 @@ describe('fetchFileBytes', () => {
     expect(await fetchFileBytes(link('https://api.example.com/v1/files/x'), 'a.pdf', f as unknown as typeof fetch)).toEqual({ kind: 'too_large' });
     expect(cancel).toHaveBeenCalled();
   });
+  it('cancels the body unread when Content-Length is over the cap', async () => {
+    document.documentElement.dataset.static = base;
+    const cancel = vi.fn();
+    const pull = vi.fn((c: ReadableStreamDefaultController<Uint8Array>) => c.enqueue(new Uint8Array(1024)));
+    const big = String(25 * 1024 * 1024 + 1);
+    const f = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ pull, cancel }, { highWaterMark: 0 }), { headers: { 'Content-Length': big } }));
+    expect(await fetchFileBytes(link('https://api.example.com/v1/files/x'), 'a.pdf', f as unknown as typeof fetch)).toEqual({ kind: 'too_large' });
+    await Promise.resolve();
+    expect(cancel).toHaveBeenCalled();
+    expect(pull).not.toHaveBeenCalled();
+    // A body whose cancel fails is still reported as too large.
+    const bad = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ cancel: () => { throw new Error('x'); } }), { headers: { 'Content-Length': big } }));
+    expect(await fetchFileBytes(link('https://api.example.com/v1/files/x'), 'a.pdf', bad as unknown as typeof fetch)).toEqual({ kind: 'too_large' });
+  });
   it('joins a headerless streamed body under the cap', async () => {
     document.documentElement.dataset.static = base;
     const f = vi.fn(async () => stream([new Uint8Array([1, 2]), new Uint8Array([3]), new Uint8Array([4, 5])], () => {}));

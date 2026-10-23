@@ -20,7 +20,11 @@ export async function fetchFileBytes(link: (path: string) => Promise<LinkOutcome
   const header = r.headers.get('Content-Length');
   const declared = header === null || header.trim() === '' ? NaN : Number(header);
   if (Number.isFinite(declared)) {
-    if (declared > MAX_PREVIEW_BYTES) return { kind: 'too_large' };
+    if (declared > MAX_PREVIEW_BYTES) {
+      // Never read: release the connection instead of leaving the body open.
+      try { void r.body?.cancel().catch(() => {}); } catch { /* a locked or odd body: nothing to release */ }
+      return { kind: 'too_large' };
+    }
     const bytes = new Uint8Array(await r.arrayBuffer());
     return bytes.byteLength > MAX_PREVIEW_BYTES ? { kind: 'too_large' } : { kind: 'ok', bytes };
   }

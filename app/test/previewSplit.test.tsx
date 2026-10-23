@@ -148,3 +148,101 @@ describe('preview split', () => {
     }
   });
 });
+
+describe('preview: never stuck in full screen', () => {
+  it('leaves full screen when the grant arrives after the open timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      let grant!: (v: boolean) => void;
+      const get = vi.fn(async () => ({ kind: 'opened' as const }));
+      const g = gate({ open: vi.fn(() => new Promise<boolean>((res) => { grant = res; })) });
+      render(<Card payload={done} download={{ enabled: true, get }} preview={g} />);
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^notes\.txt$/ })); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(DISPLAY_MODE_WAIT_MS + 10); });
+      expect(get).toHaveBeenCalledTimes(1);
+      expect(g.close).not.toHaveBeenCalled();
+      await act(async () => { grant(true); });
+      expect(g.close).toHaveBeenCalledTimes(1);
+      expect(get).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('region', { name: /Preview of/ })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a late refusal changes nothing', async () => {
+    vi.useFakeTimers();
+    try {
+      let grant!: (v: boolean) => void;
+      const g = gate({ open: vi.fn(() => new Promise<boolean>((res) => { grant = res; })) });
+      render(<Card payload={done} download={dl} preview={g} />);
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^notes\.txt$/ })); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(DISPLAY_MODE_WAIT_MS + 10); });
+      await act(async () => { grant(false); });
+      expect(g.close).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves full screen when the grant arrives after the card is gone', async () => {
+    let grant!: (v: boolean) => void;
+    const g = gate({ open: vi.fn(() => new Promise<boolean>((res) => { grant = res; })) });
+    const r = render(<Card payload={done} download={dl} preview={g} />);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^notes\.txt$/ })); });
+    r.unmount();
+    expect(g.close).not.toHaveBeenCalled();
+    await act(async () => { grant(true); });
+    expect(g.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('a stale grant does not close a preview a later click opened', async () => {
+    let first!: (v: boolean) => void;
+    const g = gate();
+    let n = 0;
+    g.open = vi.fn(() => {
+      n += 1;
+      if (n === 1) return new Promise<boolean>((res) => { first = res; });
+      g.mode = 'fullscreen';
+      return Promise.resolve(true);
+    });
+    const r = render(<Card payload={done} download={dl} preview={g} />);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^model\.xlsx$/ })); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^notes\.txt$/ })); });
+    r.rerender(<Card payload={done} download={dl} preview={{ ...g }} />);
+    await act(async () => { first(true); });
+    expect(g.close).not.toHaveBeenCalled();
+    expect(screen.getByRole('region', { name: 'Preview of notes.txt' })).toBeTruthy();
+  });
+
+  it('leaves full screen when the card unmounts with a file open', async () => {
+    const g = gate();
+    const r = render(<Card payload={done} download={dl} preview={g} />);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^notes\.txt$/ })); });
+    r.rerender(<Card payload={done} download={dl} preview={{ ...g }} />);
+    expect(await screen.findByText('note body')).toBeTruthy();
+    expect(g.close).not.toHaveBeenCalled();
+    r.unmount();
+    expect(g.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('unmounting with no file open does not touch the display mode', () => {
+    const g = gate();
+    const r = render(<Card payload={done} download={dl} preview={g} />);
+    r.unmount();
+    expect(g.close).not.toHaveBeenCalled();
+  });
+
+  it('focus returns to the open row when the host leaves full screen on its own', async () => {
+    const g = gate();
+    const r = render(<Card payload={done} download={dl} preview={g} />);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^notes\.txt$/ })); });
+    r.rerender(<Card payload={done} download={dl} preview={{ ...g }} />);
+    expect(await screen.findByText('note body')).toBeTruthy();
+    (screen.getByRole('button', { name: 'Close preview' }) as HTMLElement).focus();
+    r.rerender(<Card payload={done} download={dl} preview={{ ...g, mode: 'inline' }} />);
+    await waitFor(() => expect(screen.queryByText('note body')).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /^notes\.txt$/ }));
+    expect(g.close).not.toHaveBeenCalled();
+  });
+});

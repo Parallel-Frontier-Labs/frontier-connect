@@ -12,6 +12,18 @@ describe('single-file build', () => {
     expect(html).toContain('id="root"');
   });
 
+  // No frame the card holds may navigate: this stops a previewed HTML page from leaving with data in
+  // its URL (location.href, a meta refresh, a clicked link), which the frame's own CSP does not govern.
+  it("sets frame-src 'none' exactly once, in the head, before any script", () => {
+    const html = readFileSync('dist/task-card.html', 'utf8');
+    const meta = `<meta http-equiv="Content-Security-Policy" content="frame-src 'none'">`;
+    expect(html.split(meta)).toHaveLength(2);
+    const at = html.indexOf(meta);
+    expect(at).toBeGreaterThan(html.indexOf('<head>'));
+    expect(at).toBeLessThan(html.indexOf('</head>'));
+    expect(at).toBeLessThan(html.search(/<script/i));
+  });
+
   it('loads the fonts from the static base, keeps the font notice, and writes the font files', () => {
     const html = readFileSync('dist/task-card.html', 'utf8');
     expect(html).not.toMatch(/data:font\//);
