@@ -10,6 +10,25 @@ import { DownloadIcon } from './icons';
 
 export interface PreviewApi { bytes(path: string): Promise<FileBytes>; load: typeof loadViewer }
 
+/** Whether and how the card previews a delivered file: full screen, beside the task (Claude only). */
+export interface PreviewGate {
+  /** Claude + fullscreen offered + tool calls + viewers available. */
+  enabled: boolean;
+  /** The current display mode. */
+  mode: string;
+  /** Ask the host for full screen: true only when it applied it. */
+  open(): Promise<boolean>;
+  /** Back to inline. */
+  close(): Promise<void>;
+  api: PreviewApi;
+  safeArea?: { top: number; right: number; bottom: number; left: number };
+}
+
+export const NO_PREVIEW: PreviewGate = {
+  enabled: false, mode: 'inline', open: async () => false, close: async () => {},
+  api: { bytes: async () => ({ kind: 'failed', message: '' }), load: (() => Promise.reject(new Error('viewer unavailable'))) as unknown as PreviewApi['load'] },
+};
+
 type Render = (n: number, c: HTMLCanvasElement, w: number) => Promise<void>;
 type Ready =
   | { k: 'sheet'; sheets: SheetData[] } | { k: 'pdf'; pages: number; render: Render }

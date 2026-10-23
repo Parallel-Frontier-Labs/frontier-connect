@@ -36,6 +36,15 @@ export interface DownloadApi {
 }
 export const NO_DOWNLOADS: DownloadApi = { enabled: false, get: async () => ({ kind: 'stale' }) };
 
+/** The full-screen preview (Claude only): a row click opens the file beside the task. When the
+ * host refuses full screen (or does not answer in time), `onOpen` calls `refused` and the row
+ * downloads the file instead. */
+export interface FilePreview {
+  enabled: boolean;
+  onOpen(path: string, name: string, refused: () => void): void;
+  openPath: string | null;
+}
+
 /** The last download's outcome worth a line: a failure (with Retry) or a link to click. */
 type Note = { path: string | null; label: string; kind: 'failed'; message: string } | { path: string | null; label: string; kind: 'link'; url: string; name: string };
 
@@ -75,8 +84,8 @@ function useDownloads(api: DownloadApi) {
  * When the Frontier plugin's helper has saved the files to the user's computer (`saved`), the box
  * says so ("Saved to your folder · <dir>") and the zip becomes a small "Download again (.zip)" link.
  */
-export function DeliveredFiles({ files, download = NO_DOWNLOADS, saved = null, upload = NO_UPLOADS, taskId }:
-  { files: Deliverable[]; download?: DownloadApi; saved?: Saved | null; upload?: UploadApi; taskId?: string }) {
+export function DeliveredFiles({ files, download = NO_DOWNLOADS, saved = null, upload = NO_UPLOADS, taskId, preview }:
+  { files: Deliverable[]; download?: DownloadApi; saved?: Saved | null; upload?: UploadApi; taskId?: string; preview?: FilePreview }) {
   const d = useMemo(() => buildDelivery(files), [files]);
   const dirs = useMemo(() => allDirs(d.nodes), [d]);
   const [open, setOpen] = useState<Set<string> | null>(null);
@@ -194,7 +203,10 @@ export function DeliveredFiles({ files, download = NO_DOWNLOADS, saved = null, u
       <div class="fc-treebox">
         <ul class="fc-tree" aria-label="Delivered files">
           <Rows nodes={d.nodes} depth={0} nested={d.nested} openSet={openSet} selected={selected?.key ?? null} onToggle={toggle} onSelect={setPicked}
-            onDownload={download.enabled ? (path, name) => void dl.run(path, name) : undefined} busy={dl.busy} />
+            onDownload={download.enabled ? (path, name) => void dl.run(path, name) : undefined} busy={dl.busy}
+            preview={preview?.enabled ? { ...preview, onOpen: (path, name) => preview.onOpen(path, name, () => {
+              if (download.enabled) void dl.run(path, name);
+            }) } : undefined} />
         </ul>
         {selected ? (
           <div class="fc-mono fc-pathline" title={selected.path}>
@@ -222,8 +234,11 @@ function Rows(props: {
   onSelect: (key: string) => void;
   onDownload?: (path: string, name: string) => void;
   busy: ReadonlySet<string>;
+  preview?: FilePreview;
 }) {
-  const { nodes, depth, nested, openSet, selected, onToggle, onSelect, onDownload, busy } = props;
+  const { nodes, depth, nested, openSet, selected, onToggle, onSelect, onDownload, busy, preview } = props;
+  // While a file is open in the preview, its row is the current one.
+  const current = (key: string) => (preview?.openPath != null ? preview.openPath === srcPath(key) : selected === key);
   const pad = 10 + depth * 22;
   return (
     <>
@@ -244,8 +259,9 @@ function Rows(props: {
           </li>
         ) : (
           <li key={n.key} class={onDownload ? 'fc-tfile' : undefined}>
-            <button type="button" class="fc-trow" style={{ paddingLeft: `${nested ? pad + 22 : pad}px` }}
-              aria-current={selected === n.key ? 'true' : undefined} onClick={() => onSelect(n.key)}>
+            <button type="button" class="fc-trow" style={{ paddingLeft: `${nested ? pad + 22 : pad}px` }} data-path={srcPath(n.key)}
+              aria-current={current(n.key) ? 'true' : undefined}
+              onClick={() => { onSelect(n.key); if (preview?.enabled) preview.onOpen(srcPath(n.key), n.name, () => {}); }}>
               <Ext name={n.name} />
               <span class="fc-tname" title={n.name}>{n.name}</span>
             </button>

@@ -1,12 +1,12 @@
 import type { TaskPayload } from '../types';
-import { DeliveredFiles, type DownloadApi } from './Files';
+import { DeliveredFiles, type DownloadApi, type FilePreview } from './Files';
 import type { UploadApi } from './UploadPanel';
 import { Chevron } from './icons';
 import { doneCount } from './Plan';
 import { Summary } from './Summary';
 
 /** Finished: the takeaway, the summary, the delivered files, and the steps it took. */
-export function Done({ payload: p, download, upload }: { payload: TaskPayload; download?: DownloadApi; upload?: UploadApi }) {
+export function Done({ payload: p, download, upload, preview }: { payload: TaskPayload; download?: DownloadApi; upload?: UploadApi; preview?: FilePreview }) {
   const { result } = p;
   const steps = p.plan.length ? p.plan.map((s) => s.title) : p.sections.map((s) => s.title);
   const nDone = p.plan.length ? doneCount(p.plan) : p.sections.filter((s) => s.done).length;
@@ -15,7 +15,7 @@ export function Done({ payload: p, download, upload }: { payload: TaskPayload; d
       {result?.takeaway ? <p class="fc-takeaway">{result.takeaway}</p> : null}
       {result?.summary ? <Summary text={result.summary} type={result.summary_type} /> : null}
       {!result?.takeaway && !result?.summary ? <p class="fc-note">Finished.</p> : null}
-      {p.deliverables.length ? <DeliveredFiles files={p.deliverables} download={download} saved={p.saved} upload={upload} taskId={p.task_id} /> : null}
+      {p.deliverables.length ? <DeliveredFiles files={p.deliverables} download={download} saved={p.saved} upload={upload} taskId={p.task_id} preview={preview} /> : null}
       {steps.length ? (
         <details class="fc-stepsd">
           <summary>

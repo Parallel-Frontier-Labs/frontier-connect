@@ -15,6 +15,9 @@ import { sendFiles } from './upload/transfer';
 import type { DownloadApi } from './view/Files';
 import { TaskList, type ListActions } from './view/TaskList';
 import type { TaskPayload } from './types';
+import { NO_PREVIEW, type PreviewGate } from './view/PreviewPane';
+import { fetchFileBytes } from './preview/fetchFile';
+import { loadViewer, viewersAvailable } from './preview/loader';
 
 /** How long the host gets to open a download link before the card shows the link itself. */
 export const OPEN_LINK_WAIT_MS = 5000;
@@ -299,6 +302,22 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
     [modes, displayMode, canAnswer, transport],
   );
 
+  // The full-screen file preview: Claude only, when it offers full screen, forwards the card's
+  // tool calls (the file link) and the viewers can load. Every other host keeps a plain click.
+  const preview: PreviewGate = useMemo(() => {
+    const b = bridgeRef.current;
+    const host = b?.hostInfo?.().host?.name;
+    const enabled = canAnswer && host === 'Claude' && !!modes?.includes('fullscreen') && viewersAvailable();
+    if (!b || !enabled) return { ...NO_PREVIEW, mode: displayMode };
+    return {
+      enabled, mode: displayMode,
+      open: async () => (await (b.requestDisplayMode?.('fullscreen') ?? Promise.resolve('inline'))) === 'fullscreen',
+      close: async () => { await b.requestDisplayMode?.('inline'); },
+      api: { bytes: (path) => fetchFileBytes((p) => b.fileLink(taskRef.current ?? '', p), path), load: loadViewer },
+      safeArea: b.safeArea?.(),
+    };
+  }, [canAnswer, modes, displayMode]);
+
   const actions: ListActions = useMemo(
     () => ({
       enabled: canAnswer,
@@ -376,7 +395,7 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
   }
   if (payload && mode.kind === 'task') {
     return (
-      <Card key={payload.task_id} payload={payload} theme={theme} embedded={embedded} answer={answer} download={download} browser={browser} upload={upload}
+      <Card key={payload.task_id} payload={payload} theme={theme} embedded={embedded} answer={answer} download={download} browser={browser} upload={upload} preview={preview}
         onBack={mode.fromList && list ? back : undefined} />
     );
   }

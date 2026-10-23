@@ -59,6 +59,20 @@ describe('createHostBridge', () => {
     expect(await createHostBridge(app).getTask('t', 0)).toBeNull();
   });
 
+  it('safeArea gives the host safe-area insets, or undefined when missing or garbled', () => {
+    const app = fake({ getHostContext: vi.fn(() => ({ safeAreaInsets: { top: 16, right: 16, bottom: 88, left: 16 } })) });
+    const b = createHostBridge(app);
+    expect(b.safeArea?.()).toEqual({ top: 16, right: 16, bottom: 88, left: 16 });
+    app.getHostContext.mockReturnValue({});
+    expect(b.safeArea?.()).toBeUndefined();
+    app.getHostContext.mockReturnValue({ safeAreaInsets: 'wide' });
+    expect(b.safeArea?.()).toBeUndefined();
+    app.getHostContext.mockReturnValue({ safeAreaInsets: { top: 16, right: 'x', bottom: 88, left: 16 } });
+    expect(b.safeArea?.()).toBeUndefined();
+    app.getHostContext.mockReturnValue(undefined);
+    expect(b.safeArea?.()).toBeUndefined();
+  });
+
   it('theme maps the host context', () => {
     const app = fake();
     const b = createHostBridge(app);

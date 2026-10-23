@@ -75,6 +75,8 @@ export interface Bridge {
   requestDisplayMode?(mode: 'inline' | 'fullscreen' | 'pip'): Promise<string>;
   /** The display mode, or the modes on offer, changed. Called with the current mode. */
   onDisplayModeChange?(cb: (mode: string) => void): void;
+  /** Host safe-area insets in pixels (MCP Apps `safeAreaInsets`); undefined when the host does not say. */
+  safeArea?(): { top: number; right: number; bottom: number; left: number } | undefined;
   /** Host name/version, platform, display modes and container size from the host context. No user data. */
   hostInfo?(): HostInfo;
   /** frontier_stop_task from the card: only ever called from the user's click on Stop task.

@@ -70,6 +70,8 @@ describe('single-file build', () => {
       expect(manifest[`viewer-${n}`]).toMatch(new RegExp(`^viewer-${n}\\.[0-9a-f]{12}\\.js$`));
     }
     expect(html).not.toContain('__frontierViewers=');
+    // The card loads the viewers by these hashed names (__VIEWER_FILES__), so each is in the card.
+    for (const n of ['sheet', 'pdf', 'docx']) expect(html, n).toContain(manifest[`viewer-${n}`]);
     const listed = new Set([...Object.values(manifest), 'manifest.json']);
     for (const f of readdirSync('dist/static')) expect(listed.has(f), f).toBe(true);
   });
