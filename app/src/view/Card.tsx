@@ -1,3 +1,4 @@
+import type { JSX } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { AnswerOutcome, Answers, Stale } from '../bridge';
 import { cardClass } from '../format';
@@ -8,7 +9,7 @@ import { ControlView, SignInPanel } from './BrowserTakeover';
 import { Done } from './Done';
 import { Ended } from './Ended';
 import { FilesAsk } from './FilesAsk';
-import type { DownloadApi } from './Files';
+import { NO_DOWNLOADS, type DownloadApi, type FilePreview } from './Files';
 import { Footer } from './Footer';
 import { FormAsk } from './FormAsk';
 import { Mark, Now } from './icons';
@@ -16,6 +17,7 @@ import { SourceChip } from './TaskList';
 import { NoPlan } from './Sections';
 import { PausedSteps, PlanProgress, progressKey } from './Plan';
 import { QuestionAsk } from './Ask';
+import { NO_PREVIEW, PreviewPane, type PreviewGate } from './PreviewPane';
 import type { UploadApi } from './UploadPanel';
 
 /** How the card answers: through the host's app tool call, when the host offers one. */
@@ -97,6 +99,7 @@ export function Card({
   onBack,
   browser,
   upload,
+  preview = NO_PREVIEW,
 }: {
   payload: TaskPayload;
   theme?: 'light' | 'dark';
@@ -111,6 +114,8 @@ export function Card({
   onBack?: () => void;
   /** The task's cloud browser (frames, display modes): a live preview while the agent drives it. */
   browser?: BrowserApi;
+  /** Full-screen file preview beside the task (Claude only; NO_PREVIEW elsewhere). */
+  preview?: PreviewGate;
 }) {
   // The last answer sent from this card. It keeps the options locked ("Answered · continuing")
   // while the task picks it up, which the engine does asynchronously.
@@ -206,11 +211,49 @@ export function Card({
       setRefocus(true);
     }
   }, [browser?.mode]);
+  // The delivered file shown full screen beside the task (Claude only).
+  const [pv, setPv] = useState<{ path: string; name: string } | null>(null);
+  const narrow = useNarrow();
+  // Only the latest row click may open the preview.
+  const openSeq = useRef(0);
+  /** Full screen granted: the file opens. Refused, or no answer in time: `refused` (the row downloads). */
+  const openFile = (path: string, name: string, refused: () => void) => {
+    if (!preview.enabled) return refused();
+    const n = ++openSeq.current;
+    void withTimeout(preview.open(), DISPLAY_MODE_WAIT_MS).then((v) => {
+      // A later click took over (or the card is gone): this one neither opens nor downloads.
+      if (n !== openSeq.current || !alive.current) return;
+      if (v === true) setPv({ path, name });
+      else refused();
+    });
+  };
+  // Back from the preview (Close preview, Back to the task): focus returns to the file's row.
+  const [refocusPath, setRefocusPath] = useState<string | null>(null);
+  const leavePreview = (close: boolean) => {
+    if (pv) setRefocusPath(pv.path);
+    setPv(null);
+    if (close) void preview.close();
+  };
+  useEffect(() => {
+    if (refocusPath === null || pv) return;
+    setRefocusPath(null);
+    const row = Array.from(articleRef.current?.querySelectorAll<HTMLElement>('.fc-trow[data-path]') ?? []).find((el) => el.dataset.path === refocusPath);
+    (row ?? articleRef.current)?.focus();
+  }, [refocusPath, pv]);
+  const filePreview: FilePreview = { enabled: preview.enabled, onOpen: openFile, openPath: pv?.path ?? null };
+  // The host left full screen on its own (its close button): the preview closes.
+  const prevPvMode = useRef(preview.mode);
+  useEffect(() => {
+    const was = prevPvMode.current;
+    prevPvMode.current = preview.mode;
+    if (was === 'fullscreen' && preview.mode !== 'fullscreen') setPv(null);
+  }, [preview.mode]);
   const announcement = `Frontier task ${PILL.get(p.status) ?? 'Starting'}${showAnswered ? `. ${answered!.label}, continuing` : ''}.`;
 
   let body = null;
   if (terminal) {
-    body = p.status === 'done' ? <Done payload={p} download={download} upload={upload} /> : <Ended payload={p} download={download} upload={upload} />;
+    body = p.status === 'done' ? <Done payload={p} download={download} upload={upload} preview={filePreview} />
+      : <Ended payload={p} download={download} upload={upload} preview={filePreview} />;
   } else if (waiting && ask && !lockedAsk) {
     const send = (answers: Answers) => answer.send(ask.ask_id!, answers);
     const askView =
@@ -265,16 +308,35 @@ export function Card({
     );
   }
 
+  // The same wrappers on every render, so the card body never remounts when the preview opens or
+  // closes (an open upload, expanded folders): outside the split they are display: contents.
+  const split = !!pv && preview.mode === 'fullscreen';
+  const shell = (main: JSX.Element) => {
+    const sa = split ? preview.safeArea : undefined;
+    const pad = sa ? { paddingTop: `${sa.top}px`, paddingRight: `${sa.right}px`, paddingBottom: `${sa.bottom}px`, paddingLeft: `${sa.left}px` } : undefined;
+    return (
+      <div class={split ? 'fc-split' : 'fc-split-off'} style={pad} data-theme={split ? theme : undefined}>
+        <div class={split ? 'fc-split-main' : 'fc-split-off'} hidden={split && narrow}>{main}</div>
+        {split && pv ? (
+          <div class="fc-split-side">
+            {narrow ? <button type="button" class="fc-toggle" onClick={() => leavePreview(false)}>Back to the task</button> : null}
+            <PreviewPane key={pv.path} file={pv} api={preview.api} download={download ?? NO_DOWNLOADS} onClose={() => leavePreview(true)} />
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
   if (control && takeover && browser) {
     const full = browser.mode === 'fullscreen';
-    return (
+    return shell(
       <article class={`${cardClass(embedded)} fc-card-ctl${full ? ' fc-card-full' : ''}`} data-theme={theme} aria-label={`Frontier task: ${p.title || 'Frontier task'}, you're in control`}>
         <ControlView payload={p} api={browser} fullscreen={full} onLeave={leave} />
-      </article>
+      </article>,
     );
   }
 
-  return (
+  const article = (
     <article ref={articleRef} tabIndex={-1} class={cardClass(embedded)} data-theme={theme} aria-label={`Frontier task: ${p.title || 'Frontier task'}`}>
       {onBack ? (
         <div class="fc-backbar">
@@ -304,5 +366,22 @@ export function Card({
       <div class="fc-sr" aria-live="polite" aria-atomic="true">{announcement}</div>
     </article>
   );
+
+  return shell(article);
 }
 
+const NARROW = '(max-width: 899px)';
+
+/** True below 900 px wide: the preview then takes the whole view, with a way back to the task. */
+function useNarrow(): boolean {
+  const mq = () => (typeof window !== 'undefined' ? window.matchMedia?.(NARROW) : undefined);
+  const [narrow, setNarrow] = useState(() => !!mq()?.matches);
+  useEffect(() => {
+    const m = mq();
+    if (!m?.addEventListener) return;
+    const on = () => setNarrow(m.matches);
+    m.addEventListener('change', on);
+    return () => m.removeEventListener('change', on);
+  }, []);
+  return narrow;
+}

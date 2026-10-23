@@ -36,7 +36,7 @@ const modeOf = (v: unknown): Mode | undefined => MODES.find((m) => m === v);
 export const appCapabilities: { availableDisplayModes: Mode[] } = { availableDisplayModes: ['inline', 'fullscreen'] };
 
 type Ctx = {
-  theme?: string; displayMode?: unknown; availableDisplayModes?: unknown; platform?: unknown; containerDimensions?: unknown;
+  theme?: string; displayMode?: unknown; availableDisplayModes?: unknown; platform?: unknown; containerDimensions?: unknown; safeAreaInsets?: unknown;
 } | null | undefined;
 const cap64 = (v: unknown): string | undefined => (typeof v === 'string' && v ? v.slice(0, 64) : undefined);
 const dim = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : undefined);
@@ -210,6 +210,13 @@ export function createHostBridge(
         if (Object.keys(box).length) info.container = box;
       }
       return info;
+    },
+    safeArea() {
+      const s = ctx()?.safeAreaInsets;
+      if (!s || typeof s !== 'object') return undefined;
+      const o = s as Record<string, unknown>;
+      const out = { top: dim(o.top), right: dim(o.right), bottom: dim(o.bottom), left: dim(o.left) };
+      return Object.values(out).every((v) => v !== undefined) ? (out as { top: number; right: number; bottom: number; left: number }) : undefined;
     },
     onConnectError: (cb) => {
       errorListeners.push(cb);
