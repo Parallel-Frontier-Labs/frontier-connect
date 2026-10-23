@@ -212,21 +212,46 @@ export function Card({
     }
   }, [browser?.mode]);
   // The delivered file shown full screen beside the task (Claude only).
-  const [pv, setPv] = useState<{ path: string; name: string } | null>(null);
+  const [pv, setPvState] = useState<{ path: string; name: string } | null>(null);
+  // Mirrors pv at once (not on the next render), for the late-grant and unmount checks below.
+  const pvRef = useRef(pv);
+  const setPv = (v: { path: string; name: string } | null) => { pvRef.current = v; setPvState(v); };
+  const previewRef = useRef(preview);
+  previewRef.current = preview;
   const narrow = useNarrow();
   // Only the latest row click may open the preview.
   const openSeq = useRef(0);
+  // Full-screen requests still unanswered, and whether one was granted that no preview took.
+  const inflight = useRef(0);
+  const stray = useRef(false);
   /** Full screen granted: the file opens. Refused, or no answer in time: `refused` (the row downloads). */
   const openFile = (path: string, name: string, refused: () => void) => {
     if (!preview.enabled) return refused();
     const n = ++openSeq.current;
-    void withTimeout(preview.open(), DISPLAY_MODE_WAIT_MS).then((v) => {
-      // A later click took over (or the card is gone): this one neither opens nor downloads.
-      if (n !== openSeq.current || !alive.current) return;
-      if (v === true) setPv({ path, name });
-      else refused();
+    const latest = () => n === openSeq.current && alive.current;
+    let timedOut = false;
+    const t = setTimeout(() => { timedOut = true; if (latest()) refused(); }, DISPLAY_MODE_WAIT_MS);
+    inflight.current += 1;
+    void preview.open().then((v) => v === true, () => false).then((granted) => {
+      clearTimeout(t);
+      inflight.current -= 1;
+      // A later click took over, the card is gone, or the answer came too late: neither opens nor downloads.
+      if (latest() && !timedOut) {
+        if (granted) { setPv({ path, name }); return; }
+        refused();
+      } else if (granted) stray.current = true;
+      // A grant no preview took leaves the host full screen with nothing in it: go back to inline,
+      // once no newer request is pending (it may still open a file).
+      if (stray.current && inflight.current === 0 && !pvRef.current) {
+        stray.current = false;
+        void previewRef.current.close();
+      }
     });
   };
+  // Gone while a file is open (another task, the list): leave full screen too.
+  useEffect(() => () => {
+    if (pvRef.current) void previewRef.current.close();
+  }, []);
   // Back from the preview (Close preview, Back to the task): focus returns to the file's row.
   const [refocusPath, setRefocusPath] = useState<string | null>(null);
   const leavePreview = (close: boolean) => {
@@ -241,12 +266,12 @@ export function Card({
     (row ?? articleRef.current)?.focus();
   }, [refocusPath, pv]);
   const filePreview: FilePreview = { enabled: preview.enabled, onOpen: openFile, openPath: pv?.path ?? null };
-  // The host left full screen on its own (its close button): the preview closes.
+  // The host left full screen on its own (its close button): the preview closes, focus back on its row.
   const prevPvMode = useRef(preview.mode);
   useEffect(() => {
     const was = prevPvMode.current;
     prevPvMode.current = preview.mode;
-    if (was === 'fullscreen' && preview.mode !== 'fullscreen') setPv(null);
+    if (was === 'fullscreen' && preview.mode !== 'fullscreen' && pvRef.current) leavePreview(false);
   }, [preview.mode]);
   const announcement = `Frontier task ${PILL.get(p.status) ?? 'Starting'}${showAnswered ? `. ${answered!.label}, continuing` : ''}.`;
 

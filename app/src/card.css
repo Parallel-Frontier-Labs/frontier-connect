@@ -533,6 +533,7 @@ button:disabled { cursor: default; }
 
 .fc-pv { display: flex; flex-direction: column; min-height: 0; height: 100%; border-left: 1px solid var(--input); }
 .fc-pv-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--input); }
+.fc-pv-dl { padding: 8px 14px; border-bottom: 1px solid var(--input); }
 .fc-pv-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .fc-pv-body { flex: 1; min-height: 0; overflow: auto; padding: 14px; }
 .fc-pv-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }

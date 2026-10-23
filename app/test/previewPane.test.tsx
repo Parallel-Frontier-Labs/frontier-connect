@@ -71,7 +71,7 @@ describe('PreviewPane', () => {
   });
 
   it('renders the first 3 PDF pages, then 5 more on request', async () => {
-    const renderPage = vi.fn(async () => {});
+    const renderPage = vi.fn(async () => ({ missingImages: false }));
     const a = api({ load: vi.fn(async () => ({ open: async () => ({ pages: 12, render: renderPage }) })) as unknown as PreviewApi['load'] });
     render(<PreviewPane file={{ path: 'x.pdf', name: 'x.pdf' }} api={a} download={dl} onClose={() => {}} />);
     await waitFor(() => expect(renderPage).toHaveBeenCalledTimes(3));

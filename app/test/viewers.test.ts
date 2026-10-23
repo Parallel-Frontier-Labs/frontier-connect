@@ -30,6 +30,25 @@ describe('sheet viewer', () => {
     expect(s.rows[0].length).toBe(MAX_COLS);
     expect(s.cutRows && s.cutCols).toBe(true);
   });
+  it('reads only one row past the limit, so a huge CSV is cut, not converted in full', () => {
+    const csv = new TextEncoder().encode(Array.from({ length: 200000 }, (_, r) => `${r},x,y`).join('\n'));
+    const [s] = sheet.parse(csv);
+    expect(s.rows.length).toBe(MAX_ROWS);
+    expect(s.rows[MAX_ROWS - 1]).toEqual([String(MAX_ROWS - 1), 'x', 'y']);
+    expect(s.cutRows).toBe(true);
+    expect(s.cutCols).toBe(false);
+  });
+  it('is not cut at exactly the row limit', () => {
+    const [s] = sheet.parse(new TextEncoder().encode(Array.from({ length: MAX_ROWS }, (_, r) => `${r},x`).join('\n')));
+    expect(s.rows.length).toBe(MAX_ROWS);
+    expect(s.cutRows).toBe(false);
+  });
+  it('is cut when blank lines hide rows past the limit', () => {
+    const lines = Array.from({ length: MAX_ROWS + 50 }, (_, r) => (r === 10 ? '' : `${r},x`));
+    const [s] = sheet.parse(new TextEncoder().encode(lines.join('\n')));
+    expect(s.rows.length).toBe(MAX_ROWS);
+    expect(s.cutRows).toBe(true);
+  });
 });
 
 describe('sanitizeHtml', () => {

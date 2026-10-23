@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { SheetData } from '../../viewers/types';
+import type { PdfDoc, SheetData } from '../../viewers/types';
 import { Markdown } from '../markdown';
 import type { FileBytes } from '../preview/fetchFile';
 import { framedHtml, FRAME_SANDBOX } from '../preview/frame';
 import { HTML_FRAME, kindOf } from '../preview/kind';
 import type { loadViewer } from '../preview/loader';
-import type { DownloadApi } from './Files';
+import { DownloadNote, useDownloads, type DownloadApi } from './downloads';
 import { DownloadIcon } from './icons';
 
 export interface PreviewApi { bytes(path: string): Promise<FileBytes>; load: typeof loadViewer }
@@ -29,7 +29,7 @@ export const NO_PREVIEW: PreviewGate = {
   api: { bytes: async () => ({ kind: 'failed', message: '' }), load: (() => Promise.reject(new Error('viewer unavailable'))) as unknown as PreviewApi['load'] },
 };
 
-type Render = (n: number, c: HTMLCanvasElement, w: number) => Promise<void>;
+type Render = (n: number, c: HTMLCanvasElement, w: number) => Promise<{ missingImages: boolean } | void>;
 type Ready =
   | { k: 'sheet'; sheets: SheetData[] } | { k: 'pdf'; pages: number; render: Render }
   | { k: 'docx'; html: string } | { k: 'markdown' | 'text' | 'html'; text: string } | { k: 'image'; bytes: Uint8Array };
@@ -39,6 +39,10 @@ const NOT_HERE = "Couldn't open this file here.";
 export function PreviewPane({ file, api, download, onClose }: { file: { path: string; name: string }; api: PreviewApi; download: DownloadApi; onClose: () => void }) {
   const [st, setSt] = useState<State>({ s: 'loading' });
   const [attempt, setAttempt] = useState(0);
+  // The same download states as the Files list: Preparing…, a failure with Retry, or a link to click.
+  const dl = useDownloads(download);
+  const preparing = dl.busy.has(file.path);
+  const note = dl.note && dl.note.path === file.path ? dl.note : null;
   const current = useRef(file.path);
   current.current = file.path;
   useEffect(() => {
@@ -47,13 +51,21 @@ export function PreviewPane({ file, api, download, onClose }: { file: { path: st
     const set = (v: State) => { if (current.current === path) setSt(v); };
     if (kind === 'none') { set({ s: 'none' }); return; }
     set({ s: 'loading' });
+    // The open PDF, freed when this file's view goes (another file, a retry, the pane closing).
+    let live = true;
+    let doc: PdfDoc | null = null;
     void (async () => {
       let b: FileBytes;
       try { b = await api.bytes(path); } catch { set({ s: 'failed', message: NOT_HERE }); return; }
       if (b.kind !== 'ok') { set(b.kind === 'too_large' ? { s: 'too_large' } : { s: 'failed', message: b.message }); return; }
       try {
         if (kind === 'sheet') set({ s: 'ready', v: { k: 'sheet', sheets: (await api.load('sheet')).parse(b.bytes) } });
-        else if (kind === 'pdf') { const d = await (await api.load('pdf')).open(b.bytes); set({ s: 'ready', v: { k: 'pdf', pages: d.pages, render: d.render } }); }
+        else if (kind === 'pdf') {
+          const d = await (await api.load('pdf')).open(b.bytes);
+          if (!live) { freePdf(d); return; }
+          doc = d;
+          set({ s: 'ready', v: { k: 'pdf', pages: d.pages, render: d.render } });
+        }
         else if (kind === 'docx') set({ s: 'ready', v: { k: 'docx', html: await (await api.load('docx')).toHtml(b.bytes) } });
         else if (kind === 'image') set({ s: 'ready', v: { k: 'image', bytes: b.bytes } });
         else set({ s: 'ready', v: { k: kind, text: new TextDecoder().decode(b.bytes) } });
@@ -61,14 +73,26 @@ export function PreviewPane({ file, api, download, onClose }: { file: { path: st
         set({ s: 'failed', message: NOT_HERE });
       }
     })();
+    return () => {
+      live = false;
+      if (doc) freePdf(doc);
+      doc = null;
+    };
   }, [file.path, attempt]);
   return (
     <section class="fc-pv" aria-label={`Preview of ${file.name}`}>
       <header class="fc-pv-head">
         <span class="fc-pv-name" title={file.path}>{file.name}</span>
-        {download.enabled ? <button type="button" class="fc-toggle" aria-label={`Download ${file.name}`} onClick={() => void download.get(file.path)}><DownloadIcon />Download</button> : null}
+        {download.enabled ? (
+          <button type="button" class="fc-toggle" aria-label={preparing ? `Preparing ${file.name}` : `Download ${file.name}`}
+            aria-disabled={preparing ? 'true' : undefined} aria-busy={preparing ? 'true' : undefined}
+            onClick={() => void dl.run(file.path, file.name)}>
+            <DownloadIcon />{preparing ? 'Preparing…' : 'Download'}
+          </button>
+        ) : null}
         <button type="button" class="fc-toggle" onClick={onClose}>Close preview</button>
       </header>
+      {note ? <div class="fc-pv-dl"><DownloadNote note={note} retry={dl.run} /></div> : null}
       <div class="fc-pv-body">
         {st.s === 'loading' ? <p class="fc-muted" role="status">{`Opening ${file.name}…`}</p>
           : st.s === 'too_large' ? <p class="fc-muted">This file is too large to preview (over 25 MB).</p>
@@ -78,6 +102,10 @@ export function PreviewPane({ file, api, download, onClose }: { file: { path: st
       </div>
     </section>
   );
+}
+
+function freePdf(d: PdfDoc) {
+  try { void Promise.resolve(d.destroy?.()).catch(() => {}); } catch { /* already gone */ }
 }
 
 function Body({ v, name }: { v: Ready; name: string }) {
@@ -111,19 +139,22 @@ function Sheets({ sheets }: { sheets: SheetData[] }) {
 
 function Pdf({ pages, render }: { pages: number; render: Render }) {
   const [shown, setShown] = useState(Math.min(3, pages));
+  const [missingImages, setMissing] = useState(false);
   return (
     <div class="fc-pv-pdf">
-      {Array.from({ length: shown }, (_, n) => <Page key={n} n={n + 1} render={render} />)}
+      {missingImages ? <p class="fc-muted">Some images in this PDF can't be shown here. Download it to see them.</p> : null}
+      {Array.from({ length: shown }, (_, n) => <Page key={n} n={n + 1} render={render} onMissingImages={() => setMissing(true)} />)}
       {shown < pages ? <button type="button" class="fc-toggle" onClick={() => setShown((s) => Math.min(s + 5, pages))}>Show more pages</button> : null}
     </div>
   );
 }
 
-function Page({ n, render }: { n: number; render: Render }) {
+function Page({ n, render, onMissingImages }: { n: number; render: Render; onMissingImages: () => void }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const [bad, setBad] = useState(false);
   useEffect(() => {
-    if (ref.current) void render(n, ref.current, Math.min(ref.current.parentElement?.clientWidth || 800, 1000)).catch(() => setBad(true));
+    if (ref.current) void render(n, ref.current, Math.min(ref.current.parentElement?.clientWidth || 800, 1000))
+      .then((r) => { if (r && r.missingImages) onMissingImages(); }).catch(() => setBad(true));
   }, [n]);
   if (bad) return <p class="fc-muted">Couldn't show this page.</p>;
   return <canvas ref={ref} aria-label={`Page ${n}`} />;
