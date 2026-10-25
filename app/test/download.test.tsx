@@ -297,11 +297,11 @@ describe('add files to a delivered task', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add files to this task' }));
     pick('n.pdf');
     await sendClick();
-    expect(tell).toHaveBeenLastCalledWith('I added 1 new file to the Frontier task task-1 (n.pdf). Continue the Frontier task.');
+    expect(tell).toHaveBeenLastCalledWith('I added 1 new file to the Frontier task task-1 (n.pdf). Call frontier_continue_task for task-1 (if that tool isn\'t loaded yet, look it up by that exact name).');
     pick('m.pdf');
     await sendClick();
     expect(tell).toHaveBeenCalledTimes(2);
-    expect(tell).toHaveBeenLastCalledWith('I added 1 new file to the Frontier task task-1 (m.pdf). Continue the Frontier task.');
+    expect(tell).toHaveBeenLastCalledWith('I added 1 new file to the Frontier task task-1 (m.pdf). Call frontier_continue_task for task-1 (if that tool isn\'t loaded yet, look it up by that exact name).');
   });
   it('shows no Add files without uploads', () => {
     render(<DeliveredFiles files={[{ name: 'a.xlsx', path: 'a.xlsx' }]} taskId="task-1" />);

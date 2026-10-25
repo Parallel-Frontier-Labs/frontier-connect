@@ -33,13 +33,17 @@ function tops(paths: string[]): string {
   return out.slice(0, 5).join(', ') + (out.length > 5 ? ', …' : '');
 }
 
-/** The message the card posts so the model takes the next step (spec §4.1). */
+const LOOKUP = "if that tool isn't loaded yet, look it up by that exact name";
+
+/** The message the card posts so the model takes the next step (spec §4.1). It names the tool
+ *  exactly: hosts that defer MCP tools (Claude, Cowork) load a tool by name or by keyword search,
+ *  and "Start the Frontier task" alone led Claude to load only the picker and give up. */
 export function readyText(kind: 'new' | 'ask' | 'more', taskId: string, sent: string[]): string {
   const n = sent.length;
   const files = n === 1 ? 'file' : 'files';
-  if (kind === 'new') return `I added ${n} ${files} for Frontier (${tops(sent)}). upload_id: ${taskId}. Start the Frontier task with this upload_id; the files are already attached, so don't list them.`;
-  if (kind === 'ask') return `I added the ${files} Frontier asked for (${tops(sent)}) to task ${taskId}. Continue the Frontier task.`;
-  return `I added ${n} new ${files} to the Frontier task ${taskId} (${tops(sent)}). Continue the Frontier task.`;
+  if (kind === 'new') return `I added ${n} ${files} for Frontier (${tops(sent)}). upload_id: ${taskId}. Call frontier_start_task with this upload_id (${LOOKUP}); the files are already attached, so don't list them.`;
+  if (kind === 'ask') return `I added the ${files} Frontier asked for (${tops(sent)}) to task ${taskId}. Call frontier_continue_task for ${taskId} (${LOOKUP}).`;
+  return `I added ${n} new ${files} to the Frontier task ${taskId} (${tops(sent)}). Call frontier_continue_task for ${taskId} (${LOOKUP}).`;
 }
 
 export function UploadPanel({ taskId, instruction, api, sendLabel = 'Send to Frontier', onSent }: {

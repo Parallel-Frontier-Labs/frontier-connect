@@ -1,14 +1,53 @@
 ---
 name: frontier
-description: Use when the user wants Frontier to do work on files or folders on this computer, to follow up on a Frontier task already started in this chat, or to get a Frontier task's results (its delivered files) saved locally. Moves folders up to Frontier and brings finished files back with a small helper script.
+description: Use whenever the user wants Frontier to do work (with or without their files), to follow up on, answer or steer a Frontier task in this chat, or to get a Frontier task's results saved locally. Gives the order of Frontier's tools from start to finish, moves folders up to Frontier and brings finished files back with a small helper script.
 ---
 
 # Frontier
 
 Frontier runs long, multi-step work on its own agents and shows it in a live task card. The
-Frontier tools (`frontier_*`) come from this plugin's connector. This skill adds one thing they
-cannot do alone: moving whole folders between this computer and a Frontier task, with the helper
-script `scripts/frontier.py` that sits next to this file.
+Frontier tools (`frontier_*`) come from this plugin's connector. This skill gives the order to
+use them in, and adds one thing they cannot do alone: moving whole folders between this computer
+and a Frontier task, with the helper script `scripts/frontier.py` that sits next to this file.
+
+## First, load every Frontier tool
+
+Some apps list connector tools by name only and load each one on request. Before the first
+step, load all of these by their exact names, in one go if your app allows it. Never conclude a
+Frontier tool is missing because a keyword search did not return it; look it up by name.
+
+`frontier_start_task`, `frontier_continue_task`, `frontier_add_files`,
+`frontier_request_upload`, `frontier_wait_task`, `frontier_get_task`, `frontier_answer`,
+`frontier_steer`, `frontier_stop_task`, `frontier_request_download`, `frontier_list_tasks`,
+`frontier_list_playbooks`
+
+If one really is unavailable, tell the user which one; do not quietly do the task yourself
+instead.
+
+## How a Frontier task goes
+
+1. **Files in (if the work needs the user's files).** Local files or a folder: follow "Send
+   files or a folder to a new task" below. If the helper can't run or can't reach Frontier,
+   call `frontier_add_files` with the user's request; the user picks the files in the card,
+   which then posts a message with the `upload_id`.
+2. **Start.** Call `frontier_start_task` with the user's request verbatim (rule 2), plus
+   `upload_id` if files went in. Skip step 1 when there are no files.
+3. **Follow it.** Keep the task card visible. Call `frontier_wait_task` with the returned
+   cursor, again and again until the task is done or waits for the user, and tell the user
+   about notable updates (a new step, a question, files ready, done).
+4. **While it runs.**
+   - Frontier asks a question or shows a form: the user answers in the card, or you send
+     their answer with `frontier_answer` (only what the user clearly said).
+   - Frontier asks for files: see "When Frontier asks for files" below.
+   - The user adds direction: `frontier_steer`.
+   - The user wants it stopped: `frontier_stop_task`.
+   - It waits for the user in the card's browser (for example to sign in): tell them to press
+     **Take over** in the card. Never ask for passwords in chat.
+5. **Done.** Name the deliverables. Save them into the user's folder as in "Bring the results
+   back" below.
+6. **Follow-up.** Anything more the user asks in this chat goes to `frontier_continue_task`
+   with the same `task_id` (rule 1), then back to step 3. To pick up a task from an earlier
+   chat, find it with `frontier_list_tasks`, then continue it.
 
 ## Running the helper
 

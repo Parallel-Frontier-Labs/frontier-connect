@@ -413,7 +413,7 @@ describe('files ask uploads', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Send to Frontier' })); });
     await flush();
     expect(tell).toHaveBeenCalledTimes(1);
-    expect(tell).toHaveBeenCalledWith('I added the file Frontier asked for (2023.pdf) to task task-1. Continue the Frontier task.');
+    expect(tell).toHaveBeenCalledWith('I added the file Frontier asked for (2023.pdf) to task task-1. Call frontier_continue_task for task-1 (if that tool isn\'t loaded yet, look it up by that exact name).');
     expect(screen.getByRole('status').textContent).toContain('Sent');
     expect(screen.getByRole('button', { name: 'Skip' })).toBeTruthy();
   });

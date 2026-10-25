@@ -220,11 +220,11 @@ describe('UploadPanel public review fixes', () => {
 describe('readyText', () => {
   it('names the task and what was added', () => {
     expect(readyText('new', 'task-1', ['S/a.pdf', 'S/b.pdf', 'm.xlsx'])).toBe(
-      'I added 3 files for Frontier (S/, m.xlsx). upload_id: task-1. Start the Frontier task with this upload_id; the files are already attached, so don\'t list them.');
+      'I added 3 files for Frontier (S/, m.xlsx). upload_id: task-1. Call frontier_start_task with this upload_id (if that tool isn\'t loaded yet, look it up by that exact name); the files are already attached, so don\'t list them.');
     expect(readyText('ask', 'task-1', ['a.pdf'])).toBe(
-      'I added the file Frontier asked for (a.pdf) to task task-1. Continue the Frontier task.');
+      'I added the file Frontier asked for (a.pdf) to task task-1. Call frontier_continue_task for task-1 (if that tool isn\'t loaded yet, look it up by that exact name).');
     expect(readyText('more', 'task-1', ['a.pdf', 'b.pdf'])).toBe(
-      'I added 2 new files to the Frontier task task-1 (a.pdf, b.pdf). Continue the Frontier task.');
+      'I added 2 new files to the Frontier task task-1 (a.pdf, b.pdf). Call frontier_continue_task for task-1 (if that tool isn\'t loaded yet, look it up by that exact name).');
   });
 });
 
@@ -234,8 +234,8 @@ describe('AddFiles', () => {
     render(<AddFiles add={{ view: 'add_files', task_id: 'task-1', instruction: '', existing: true }} api={a} theme="light" embedded />);
     pick(document.querySelector<HTMLInputElement>('input[multiple]:not([webkitdirectory])')!, [file('a.pdf')]);
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Send to Frontier' })); });
-    await waitFor(() => expect(a.tell).toHaveBeenCalledWith(expect.stringContaining('Continue the Frontier task.')));
-    expect((a.tell as any).mock.calls[0][0]).not.toContain('Start the Frontier task');
+    await waitFor(() => expect(a.tell).toHaveBeenCalledWith(expect.stringContaining('Call frontier_continue_task for task-1')));
+    expect((a.tell as any).mock.calls[0][0]).not.toContain('frontier_start_task');
   });
 
   it('shows the request, uploads, then tells the chat; if the host cannot, says what to tell it', async () => {
