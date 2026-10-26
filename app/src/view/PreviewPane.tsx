@@ -10,7 +10,7 @@ import { DownloadIcon } from './icons';
 
 export interface PreviewApi { bytes(path: string): Promise<FileBytes>; load: typeof loadViewer }
 
-/** Whether and how the card previews a delivered file: full screen, beside the task (Claude only). */
+/** Whether and how the card previews a delivered file: full screen, beside the task (hosts that offer full screen). */
 export interface PreviewGate {
   /** Claude + fullscreen offered + tool calls + viewers available. */
   enabled: boolean;

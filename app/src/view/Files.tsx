@@ -30,7 +30,7 @@ const Sep = () => <span class="fc-sep">/</span>;
 
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
-/** The full-screen preview (Claude only): a row click opens the file beside the task. When the
+/** The full-screen preview (hosts that offer full screen): a row click opens the file beside the task. When the
  * host refuses full screen (or does not answer in time), `onOpen` calls `refused` and the row
  * downloads the file instead. */
 export interface FilePreview {

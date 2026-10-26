@@ -62,22 +62,25 @@ afterEach(() => {
 });
 
 describe('Root preview gate', () => {
-  it('previews in Claude with full screen offered, tool calls and the viewers available', async () => {
-    const r = rig();
-    render(<Root makeBridge={() => r.bridge} />);
-    r.start();
-    await click();
-    expect(r.bridge.requestDisplayMode).toHaveBeenCalledWith('fullscreen');
-    r.setMode('fullscreen');
-    expect(document.querySelector('.fc-split')).toBeTruthy();
-    expect(screen.getByRole('region', { name: 'Preview of notes.txt' })).toBeTruthy();
-  });
+  // Any host that offers full screen gets the preview, not only Claude. Codex lists
+  // inline + fullscreen and has no way for an app to open a file in its own viewer, so a file
+  // click there used to do nothing at all.
+  for (const name of ['Claude', 'Codex', 'ChatGPT', 'claude', 'Claude Desktop']) {
+    it(`previews with full screen offered, tool calls and the viewers available: ${name}`, async () => {
+      const r = rig({ name });
+      render(<Root makeBridge={() => r.bridge} />);
+      r.start();
+      await click();
+      expect(r.bridge.requestDisplayMode).toHaveBeenCalledWith('fullscreen');
+      r.setMode('fullscreen');
+      expect(document.querySelector('.fc-split')).toBeTruthy();
+      expect(screen.getByRole('region', { name: 'Preview of notes.txt' })).toBeTruthy();
+    });
+  }
 
   const plain: [string, Parameters<typeof rig>[0], (() => void)?][] = [
-    ['another host (ChatGPT)', { name: 'ChatGPT' }],
-    ['a name that only looks like Claude', { name: 'claude' }],
-    ['a name that only starts with Claude', { name: 'Claude Desktop' }],
     ['no fullscreen offered', { modes: ['inline', 'pip'] }],
+    ['no fullscreen offered (Codex)', { name: 'Codex', modes: ['inline'] }],
     ['the card cannot call tools', { canAnswer: false }],
     ['an unfilled static base', {}, () => { document.documentElement.dataset.static = '__FRONTIER_STATIC__'; }],
   ];

@@ -302,12 +302,13 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
     [modes, displayMode, canAnswer, transport],
   );
 
-  // The full-screen file preview: Claude only, when it offers full screen, forwards the card's
-  // tool calls (the file link) and the viewers can load. Every other host keeps a plain click.
+  // The full-screen file preview: on any host that offers full screen, forwards the card's tool
+  // calls (the file link) and where the viewers can load. Codex offers full screen but gives an
+  // app no way to open a file in its own viewer, so this is its only preview. A host
+  // without full screen keeps a plain click, and one that refuses it falls back to a download.
   const preview: PreviewGate = useMemo(() => {
     const b = bridgeRef.current;
-    const host = b?.hostInfo?.().host?.name;
-    const enabled = canAnswer && host === 'Claude' && !!modes?.includes('fullscreen') && viewersAvailable();
+    const enabled = canAnswer && !!modes?.includes('fullscreen') && viewersAvailable();
     if (!b || !enabled) return { ...NO_PREVIEW, mode: displayMode };
     return {
       enabled, mode: displayMode,

@@ -114,7 +114,7 @@ export function Card({
   onBack?: () => void;
   /** The task's cloud browser (frames, display modes): a live preview while the agent drives it. */
   browser?: BrowserApi;
-  /** Full-screen file preview beside the task (Claude only; NO_PREVIEW elsewhere). */
+  /** Full-screen file preview beside the task (hosts that offer full screen; NO_PREVIEW elsewhere). */
   preview?: PreviewGate;
 }) {
   // The last answer sent from this card. It keeps the options locked ("Answered · continuing")
@@ -211,7 +211,7 @@ export function Card({
       setRefocus(true);
     }
   }, [browser?.mode]);
-  // The delivered file shown full screen beside the task (Claude only).
+  // The delivered file shown full screen beside the task (hosts that offer full screen).
   const [pv, setPvState] = useState<{ path: string; name: string } | null>(null);
   // Mirrors pv at once (not on the next render), for the late-grant and unmount checks below.
   const pvRef = useRef(pv);
