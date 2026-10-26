@@ -85,11 +85,13 @@ expired" means: ask for a new link and run again.
 1. **One chat, one Frontier task.** Every follow-up in this chat continues the task already
    started here with `frontier_continue_task`; while it runs, use `frontier_steer`. Start a new
    task only when the user explicitly asks for separate work.
-2. **Pass the user's request in their own words.** The `instruction` you give
-   `frontier_request_upload`, `frontier_start_task` or `frontier_continue_task` is what the user
-   asked, copied verbatim, then any relevant context from this chat and what they want back.
-   Never a summary: not "Review the Q1 brokerage statement.", but the user's whole message.
-   The one exception is the short note that answers a request for files (below).
+2. **The user's words go in unchanged.** The `instruction` you give `frontier_request_upload`,
+   `frontier_start_task` or `frontier_continue_task` is the user's message exactly as they typed
+   it, character for character. Never a summary ("Review the Q1 brokerage statement."), never a
+   rewrite, and never your own spec of the work ("Extract every holding with page citations,
+   compare it to the benchmark, produce a memo and a spreadsheet"). Background from earlier in
+   the chat goes in `assistant_notes`, a few lines at most. The one exception is the short note
+   that answers a request for files (below).
 3. **Never overwrite the user's work.** The helper never moves or deletes a file. It updates a
    file in place only when it still holds exactly what Frontier delivered there last time. A
    file the user changed, one Frontier did not put there, or one that is open in another app or
@@ -127,6 +129,25 @@ folders are skipped unless listed by name. Links that point outside the folder a
 the walk skips them, and listing one is refused. `context.md` and `folder-index.md` at the
 top of the folder are never sent (Frontier writes those itself); the helper says so, and the user
 can rename them to send them.
+
+## Send data you gathered
+
+When the task needs data you fetched from the user's other apps (a CRM export, an email thread,
+query results) that Frontier cannot reach itself:
+
+1. Write each item as its own file with a clear name in a fresh temporary folder, for example
+   `salesforce/q3-pipeline.csv` and `gmail/client-thread.txt`. Don't merge them into one file.
+2. Upload the folder (or put the files in the same folder as the user's files):
+   - New task: as in "Send files or a folder to a new task".
+   - Follow-up in this chat: call `frontier_request_upload` with the chat's `task_id` (and no
+     `files`), then run `stage` with that ticket.
+3. Hand over the turn with the user's message as `instruction` (rule 2) and, in
+   `assistant_notes`, one line per file saying what it is:
+   - New task: `frontier_start_task` with the `upload_id`.
+   - Follow-up: `frontier_continue_task` with the chat's `task_id` (rule 1).
+
+If the helper can't run, pass the text as `context` instead (up to 200 KB), on
+`frontier_start_task` or `frontier_continue_task` the same way.
 
 ## When Frontier asks for files
 
