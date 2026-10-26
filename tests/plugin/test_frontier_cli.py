@@ -9,6 +9,7 @@ Run: python3 -m unittest discover -s tests/plugin
 from __future__ import annotations
 
 import contextlib
+import email.message
 import errno
 import stat
 import hashlib
@@ -327,6 +328,10 @@ class Tickets(unittest.TestCase):
         for want in ("api.parallelfrontier.io", "Settings → Capabilities", "Admin settings → Capabilities"):
             self.assertIn(want, fr.NETWORK_BLOCKED)
         self.assertNotIn("Check the connection", r.stderr)
+        # The assistant gets a quiet, fixed-code diagnostic on stdout; the user's line stays clean.
+        self.assertEqual(json.loads(r.stdout), {"diagnostic": {"stage": "proxy_connect", "status": 403}})
+        self.assertNotIn("diagnostic", r.stderr)
+        self.assertNotIn(RAW, r.stdout + r.stderr)
 
     def test_plain_network_failure_keeps_the_connection_hint(self):
         err = urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
@@ -335,6 +340,71 @@ class Tickets(unittest.TestCase):
             with self.assertRaises(fr.FrontierError) as ctx:
                 fr.ticket_call("https://api.parallelfrontier.io", RAW, "GET", "/files", None, False)
         self.assertEqual(str(ctx.exception), fr.net_hint({"api.parallelfrontier.io"}))
+
+    def _http_error(self, code: int, body: bytes, ctype: str = "application/json") -> urllib.error.HTTPError:
+        hdrs = email.message.Message()
+        hdrs["Content-Type"] = ctype
+        hdrs["Server"] = "edge"
+        return urllib.error.HTTPError("https://api.parallelfrontier.io/v1/connect/t/files", code,
+                                      "Forbidden", hdrs, io.BytesIO(body))
+
+    def _call_raising(self, err: BaseException) -> "fr.FrontierError":
+        with mock.patch.object(fr, "_opener") as op:
+            op.return_value.open.side_effect = err
+            with self.assertRaises(fr.FrontierError) as ctx:
+                fr.ticket_call("https://api.parallelfrontier.io", RAW, "GET", "/files", None, False)
+        return ctx.exception
+
+    def test_edge_block_is_not_called_an_account_problem(self):
+        # The network edge refused the request (error 1010, browser signature): the account is
+        # fine, so the user must not be told "Frontier refused access for this account".
+        body = (b'{"title":"Error 1010: Access denied","status":403,'
+                b'"error_code":1010,"error_name":"browser_signature_banned"}')
+        exc = self._call_raising(self._http_error(403, body))
+        self.assertEqual(str(exc), fr.EDGE_BLOCKED)
+        self.assertNotIn("account", fr.EDGE_BLOCKED)
+        self.assertEqual(exc.diagnostic, {"stage": "http", "status": 403, "edge": "network",
+                                          "code": 1010})
+
+    def test_edge_plain_text_block_is_recognized(self):
+        exc = self._call_raising(self._http_error(403, b"error code: 1010", "text/plain; charset=UTF-8"))
+        self.assertEqual(str(exc), fr.EDGE_BLOCKED)
+        self.assertEqual(exc.diagnostic["code"], 1010)
+
+    def test_a_json_error_code_without_an_error_name_is_not_an_edge_block(self):
+        exc = self._call_raising(self._http_error(403, b'{"error_code":1010,"detail":"forbidden"}'))
+        self.assertEqual(str(exc), fr.NO_ACCESS)
+        self.assertNotIn("edge", exc.diagnostic)
+
+    def test_frontier_refusing_the_account_keeps_its_message(self):
+        exc = self._call_raising(self._http_error(403, b'{"detail":"forbidden"}'))
+        self.assertEqual(str(exc), fr.NO_ACCESS)
+        self.assertEqual(exc.diagnostic, {"stage": "http", "status": 403})
+
+    def test_plain_network_failure_names_only_the_error_kind(self):
+        exc = self._call_raising(urllib.error.URLError(ConnectionRefusedError(111, "Connection refused")))
+        self.assertEqual(exc.diagnostic, {"stage": "network", "kind": "ConnectionRefusedError"})
+
+    def test_main_prints_the_diagnostic_on_stdout_only(self):
+        err = fr.FrontierError(fr.EDGE_BLOCKED,
+                               diagnostic={"stage": "http", "status": 403, "edge": "network", "code": 1010})
+        out, errs = io.StringIO(), io.StringIO()
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(fr, "stage", side_effect=err), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(errs):
+            code = fr.main(["stage", "--ticket", f"https://api.parallelfrontier.io/v1/connect/t#{RAW}",
+                            "--root", root])
+        self.assertEqual(code, 1)
+        self.assertEqual(errs.getvalue(), f"frontier: {fr.EDGE_BLOCKED}\n")
+        self.assertEqual(json.loads(out.getvalue()), {"diagnostic": err.diagnostic})
+
+    def test_main_prints_nothing_on_stdout_without_a_diagnostic(self):
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as root, \
+                mock.patch.object(fr, "stage", side_effect=fr.FrontierError(fr.EXPIRED)), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            fr.main(["stage", "--ticket", f"https://api.parallelfrontier.io/v1/connect/t#{RAW}",
+                     "--root", root])
+        self.assertEqual(out.getvalue(), "")
 
     def test_production_ticket_parses(self):
         raw = fr.parse_ticket(f"https://api.parallelfrontier.io/v1/connect/t#{RAW}", None)

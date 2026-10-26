@@ -67,8 +67,15 @@ The helper needs network access to `api.parallelfrontier.io` only: files move th
   request (and the chat's `task_id`, if there is one), so they pick the files in the Frontier
   card. Then wait for their message that the files are ready, then call `frontier_start_task`
   with that `upload_id` (or `frontier_continue_task` if the chat already has a Frontier task).
+- If the helper says Frontier couldn't take this request from here, do not retry: relay that line
+  and offer the same other way (`frontier_add_files` for files going in; for results, the task
+  card shows the files and the user can download them there).
 
-It prints JSON on stdout and short lines for the user on stderr. Exit codes: 0 done, 1 Frontier
+It prints JSON on stdout and short lines for the user on stderr. When it fails, stdout may hold
+`{"diagnostic": {...}}`: short codes for you only (for example `"stage": "proxy_connect"` means this
+app's proxy refused the connection; `"edge": "network"` means Frontier's network edge turned the
+request away). Never show or quote it to the user; use it only if the user asks why something
+failed, and then say it in plain words. Exit codes: 0 done, 1 Frontier
 or the network refused (relay the message; retry at most once), 2 a usage problem (fix the command), 3 some files
 failed (say which, the rest are done). For a failed file the helper says why; "the link
 expired" means: ask for a new link and run again.

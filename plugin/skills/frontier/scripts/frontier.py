@@ -57,7 +57,7 @@ WORKERS = 4
 TIMEOUT_S = 60
 MAX_JSON_BYTES = 32 * 1024 * 1024
 CHUNK = 1024 * 1024
-USER_AGENT = "frontier-plugin/0.2.1"
+USER_AGENT = "frontier-plugin/0.2.2"
 DEFAULT_MIME = "application/octet-stream"
 
 EXPIRED = ("This Frontier link has expired or was already used. Ask the assistant to request a "
@@ -76,14 +76,41 @@ NETWORK_BLOCKED = ("This app's network settings block api.parallelfrontier.io, s
                    "org owner does this in Admin settings → Capabilities). Then ask again.")
 # Top-level names Frontier writes into a task's folder itself; the server refuses a manifest
 # that holds one, so the helper never sends them.
+# Frontier's network edge (in front of api.parallelfrontier.io) refused the request before it reached
+# Frontier: the account is fine, so this must never read as an account problem.
+EDGE_BLOCKED = "Frontier couldn't take this request from here."
 RESERVED_TOP_FILES = frozenset({"folder-index.md", "context.md"})
 
 
-def _proxy_refused(exc: BaseException) -> bool:
-    """True when a proxy refused the tunnel (CONNECT answered 403 or 407): a policy denial of the
-    host, not a flaky connection."""
+def _proxy_refused(exc: BaseException) -> int | None:
+    """The proxy's status when it refused the tunnel (CONNECT answered 403 or 407): a policy denial
+    of the host, not a flaky connection. None otherwise."""
     text = f"{exc} {getattr(exc, 'reason', '')}"
-    return "Tunnel connection failed: 403" in text or "Tunnel connection failed: 407" in text
+    for status in (403, 407):
+        if f"Tunnel connection failed: {status}" in text:
+            return status
+    return None
+
+
+_EDGE_JSON = re.compile(rb'"error_code"\s*:\s*(\d{4})\b')
+_EDGE_TEXT = re.compile(rb"\Aerror code: (\d{4})\s*\Z", re.IGNORECASE)
+
+
+def _edge_code(body: bytes) -> int | None:
+    """The edge's 1xxx code when the body is the network edge's own block page (plain text, or JSON
+    with a 4-digit error_code and an error_name), else None. Frontier's own refusals are
+    {"detail": ...} and never match."""
+    m = _EDGE_TEXT.match(body.strip())
+    if m is None and b'"error_name"' in body:
+        m = _EDGE_JSON.search(body)
+    return int(m.group(1)) if m else None
+
+
+def _kind(exc: BaseException) -> str:
+    """A fixed, short name for a network failure: the exception class, never its text."""
+    reason = getattr(exc, "reason", None)
+    name = type(reason if isinstance(reason, BaseException) else exc).__name__
+    return name if re.fullmatch(r"[A-Za-z]{1,40}", name) else "error"
 
 
 def net_hint(hosts: set[str]) -> str:
@@ -100,11 +127,15 @@ class UsageError(Exception):
 
 
 class FrontierError(Exception):
-    """Frontier or the network refused: exit 1. `status` is the HTTP status when Frontier answered."""
+    """Frontier or the network refused: exit 1. `status` is the HTTP status when Frontier answered.
+    `diagnostic` is for the assistant only (printed as JSON on stdout, never shown to the user):
+    fixed codes and numbers, never a URL, header, ticket or response text."""
 
-    def __init__(self, message: str = "", status: int | None = None) -> None:
+    def __init__(self, message: str = "", status: int | None = None,
+                 diagnostic: dict | None = None) -> None:
         super().__init__(message)
         self.status = status
+        self.diagnostic = diagnostic
 
 
 # --- folder-relative paths: the same rules as Frontier's server-side check ------------------
@@ -252,31 +283,46 @@ def ticket_call(origin: str, raw: str, method: str, sub: str, body: dict | None,
             return _read_json(resp)
     except urllib.error.HTTPError as exc:
         code = exc.code
+        diag: dict = {"stage": "http", "status": code}
         detail = ""
+        body = b""
+        if code in (400, 401, 403):
+            try:
+                body = exc.read(64 * 1024)
+            except Exception:  # noqa: BLE001 - the body is optional
+                body = b""
         if code == 400:
             try:
-                detail = _clean(json.loads(exc.read(64 * 1024)).get("detail", ""))
+                detail = _clean(json.loads(body).get("detail", ""))
             except Exception:  # noqa: BLE001 - the detail is optional
                 detail = ""
         exc.close()
+        edge = _edge_code(body) if code in (401, 403) else None
+        if edge is not None:
+            raise FrontierError(EDGE_BLOCKED, status=code,
+                                diagnostic={**diag, "edge": "network", "code": edge}) from None
         if code == 404:
-            raise FrontierError(EXPIRED) from None
+            raise FrontierError(EXPIRED, diagnostic=diag) from None
         if code == 429:
-            raise FrontierError(RATE_LIMITED) from None
+            raise FrontierError(RATE_LIMITED, diagnostic=diag) from None
         if code == 400:
             raise FrontierError(f"Frontier refused the request: {detail or 'bad request'}",
-                                status=400) from None
+                                status=400, diagnostic=diag) from None
         if code == 402:  # the paid check: waiting will not fix it
-            raise FrontierError(PLAN_INACTIVE) from None
+            raise FrontierError(PLAN_INACTIVE, diagnostic=diag) from None
         if code in (401, 403):
-            raise FrontierError(NO_ACCESS) from None
+            raise FrontierError(NO_ACCESS, diagnostic=diag) from None
         if code >= 500:
-            raise FrontierError(f"Frontier answered HTTP {code}; try again in a moment") from None
-        raise FrontierError(f"Frontier refused the request (HTTP {code}).") from None
+            raise FrontierError(f"Frontier answered HTTP {code}; try again in a moment",
+                                diagnostic=diag) from None
+        raise FrontierError(f"Frontier refused the request (HTTP {code}).", diagnostic=diag) from None
     except (urllib.error.URLError, http.client.HTTPException, OSError, socket.timeout) as exc:
-        if _host(origin) == API_HOST and _proxy_refused(exc):
-            raise FrontierError(NETWORK_BLOCKED) from None
-        raise FrontierError(net_hint({_host(origin)})) from None
+        refused = _proxy_refused(exc)
+        if _host(origin) == API_HOST and refused:
+            raise FrontierError(NETWORK_BLOCKED,
+                                diagnostic={"stage": "proxy_connect", "status": refused}) from None
+        raise FrontierError(net_hint({_host(origin)}),
+                            diagnostic={"stage": "network", "kind": _kind(exc)}) from None
 
 
 def _host(url: str) -> str:
@@ -1381,6 +1427,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except FrontierError as exc:
         print(f"frontier: {exc}", file=sys.stderr)
+        if exc.diagnostic:
+            print(json.dumps({"diagnostic": exc.diagnostic}))
         return 1
     except OSError as exc:
         print(f"frontier: {exc.strerror or 'file error'}", file=sys.stderr)
