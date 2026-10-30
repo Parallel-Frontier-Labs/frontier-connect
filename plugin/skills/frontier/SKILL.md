@@ -42,7 +42,8 @@ instead.
    - The user adds direction: `frontier_steer`.
    - The user wants it stopped: `frontier_stop_task`.
    - It waits for the user in the card's browser (for example to sign in): tell them to press
-     **Take over** in the card. Never ask for passwords in chat.
+     **Take over** in the card (or **Take control** while the agent is driving, to pause it and
+     drive the browser themselves). Never ask for passwords in chat.
 5. **Done.** Name the deliverables. Save them into the user's folder as in "Bring the results
    back" below.
 6. **Follow-up.** Anything more the user asks in this chat goes to `frontier_continue_task`
@@ -90,7 +91,9 @@ expired" means: ask for a new link and run again.
    it, character for character. Never a summary ("Review the Q1 brokerage statement."), never a
    rewrite, and never your own spec of the work ("Extract every holding with page citations,
    compare it to the benchmark, produce a memo and a spreadsheet"). Background from earlier in
-   the chat goes in `assistant_notes`, a few lines at most. The one exception is the short note
+   the chat goes in `assistant_notes`, a few lines at most. Keep phrases the user typed that tell
+   Frontier how to work, such as "use Frontier's browser agent" or "go to <site>": they change
+   what Frontier does. The one exception is the short note
    that answers a request for files (below).
 3. **Never overwrite the user's work.** The helper never moves or deletes a file. It updates a
    file in place only when it still holds exactly what Frontier delivered there last time. A
