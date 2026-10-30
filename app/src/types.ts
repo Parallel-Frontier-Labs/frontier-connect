@@ -42,6 +42,8 @@ export interface BrowserInfo {
   state: (typeof BROWSER_STATES)[number]; site: string | null;
   /** The wait is a form in the task's browser (typed answers), not a sign-in: no takeover. */
   form?: true;
+  /** The user asked for this pause (Take control), not a sign-in: the card skips the sign-in panel. */
+  user?: true;
 }
 
 export interface TaskPayload {
@@ -235,6 +237,8 @@ function cleanBrowser(v: unknown): BrowserInfo | null {
   if (!o || !state) return null;
   const out: BrowserInfo = { state, site: cleanSite(o.site) };
   if (state === 'waiting' && o.form === true) out.form = true;
+  // A form wait is never a control view: form wins.
+  else if (state === 'waiting' && o.user === true) out.user = true;
   return out;
 }
 

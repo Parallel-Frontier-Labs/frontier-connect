@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { HostInfo } from '../src/bridge';
 import {
-  BrowserFeed, inputUrl, postInput, FEED_BACKOFF_MS, FEED_INTERVAL_MS, FEED_RETRY_DIRECT_MS, FEED_TIMEOUT_MS, type FeedStatus, frameUrl, hostReportBody, hostReportUrl, sendHostReport,
+  BrowserFeed, controlUrl, inputUrl, postControl, postInput, FEED_BACKOFF_MS, FEED_INTERVAL_MS, FEED_RETRY_DIRECT_MS, FEED_TIMEOUT_MS, type FeedStatus, frameUrl, hostReportBody, hostReportUrl, sendHostReport,
   type BrowserFrame, type FrameSource,
 } from '../src/browserFeed';
 
@@ -52,11 +52,16 @@ describe('frame and host-report URLs', () => {
     expect(hostReportUrl(VIEW)).toBe('https://api.example.com/v1/connect/host-report');
     expect(inputUrl(VIEW)).toBe('https://api.example.com/v1/runs/t-1/browser/input');
   });
+  it('controlUrl builds the route', () => {
+    expect(controlUrl(VIEW)).toBe('https://api.example.com/v1/runs/t-1/browser/control');
+    expect(controlUrl('https://h.example.com/api/v1/runs/abc/view')).toBe('https://h.example.com/api/v1/runs/abc/browser/control');
+  });
   it('refuse anything that is not an https view url', () => {
     for (const u of ['http://api.example.com/v1/runs/t/view', 'https://a.io/v1/runs/t/other', 'javascript:alert(1)', 'nope', 'https://a.io/v1/runs//view', 'https://a.io/v1/runs/t/view?x=1']) {
       expect(frameUrl(u)).toBeNull();
       expect(hostReportUrl(u)).toBeNull();
       expect(inputUrl(u)).toBeNull();
+      expect(controlUrl(u)).toBeNull();
     }
   });
 });
@@ -460,5 +465,55 @@ describe('postInput', () => {
     expect(JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)).toEqual({ events: evs });
     expect(await postInput(source(), 't-1', [], f as unknown as typeof fetch)).toBe('ok');
     expect(f).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('postControl', () => {
+  const source = (o: Partial<FrameSource> = {}): FrameSource => ({
+    view: () => ({ token: 'tok', url: VIEW, taskId: 't-1' }), renewToken: vi.fn(async () => false), bridgeOnly: () => false, ...o,
+  });
+  const answer = (st: number) => (async () => ({ status: st, ok: st >= 200 && st < 300, headers: new Headers(st === 429 ? { 'Retry-After': '2' } : {}), json: async () => null })) as unknown as typeof fetch;
+
+  it('posts to the control route with the view token and a 5 s timeout', async () => {
+    const f = vi.fn(async (..._a: unknown[]) => resp(202, { accepted: true }));
+    expect(await postControl(source(), 't-1', f as unknown as typeof fetch)).toBe('ok');
+    const [url, init] = f.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.example.com/v1/runs/t-1/browser/control');
+    expect(init.method).toBe('POST');
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer tok');
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('maps 202 to ok, 409 to not_live, 429 to busy, 5xx and network errors to failed', async () => {
+    for (const [st, want] of [[202, 'ok'], [409, 'not_live'], [429, 'busy'], [500, 'failed'], [503, 'failed'], [404, 'failed']] as const) {
+      expect(await postControl(source(), 't-1', answer(st))).toBe(want);
+    }
+    expect(await postControl(source(), 't-1', (async () => { throw new TypeError('x'); }) as unknown as typeof fetch)).toBe('failed');
+    expect(await postControl(source({ view: () => null }), 't-1', vi.fn() as unknown as typeof fetch)).toBe('failed');
+  });
+
+  it('renews a refused token once, then retries with the new one', async () => {
+    let token = 'tok';
+    const src = source({ view: () => ({ token, url: VIEW, taskId: 't-1' }), renewToken: vi.fn(async () => { token = 'tok2'; return true; }) });
+    const f = vi.fn(async (..._a: unknown[]) => (f.mock.calls.length === 1 ? resp(401) : resp(202)));
+    expect(await postControl(src, 't-1', f as unknown as typeof fetch)).toBe('ok');
+    expect(((f.mock.calls[1] as [string, RequestInit])[1].headers as Record<string, string>).Authorization).toBe('Bearer tok2');
+    const g = vi.fn(async () => resp(401));
+    expect(await postControl(source({ renewToken: vi.fn(async () => true) }), 't-1', g as unknown as typeof fetch)).toBe('failed');
+    expect(g).toHaveBeenCalledTimes(2);
+  });
+
+  it('sends nothing for another task, including after a renewal', async () => {
+    const f = vi.fn(async (..._a: unknown[]) => resp(202));
+    expect(await postControl(source(), 't-OTHER', f as unknown as typeof fetch)).toBe('failed');
+    expect(f).not.toHaveBeenCalled();
+    let view = { token: 'tok', url: VIEW, taskId: 't-1' };
+    const src = source({
+      view: () => view,
+      renewToken: vi.fn(async () => { view = { token: 'n', url: 'https://api.example.com/v1/runs/t-2/view', taskId: 't-2' }; return true; }),
+    });
+    const g = vi.fn(async (..._a: unknown[]) => resp(401));
+    expect(await postControl(src, 't-1', g as unknown as typeof fetch)).toBe('failed');
+    expect(g).toHaveBeenCalledTimes(1);
   });
 });

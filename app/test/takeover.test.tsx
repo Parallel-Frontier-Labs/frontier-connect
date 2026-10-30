@@ -603,3 +603,90 @@ describe('input stays with its task', () => {
   });
 });
 
+
+describe('Take control: straight into control', () => {
+  const live = (o: Partial<TaskPayload> = {}) => mk({ status: 'running', browser: { state: 'live', site: 'app.example.com' }, events: [], ...o });
+  const userWait = (o: Partial<TaskPayload> = {}) => mk({
+    browser: { state: 'waiting', site: 'app.example.com', user: true },
+    events: [{ seq: 6, kind: 'takeover', text: 'You took control of the browser. Press Done, resume task when you are finished.' }],
+    ...o,
+  });
+  const withControl = (e: ReturnType<typeof env>) => {
+    const control = vi.fn(async (_t: string) => 'ok' as const);
+    return { control, api: () => ({ ...e.api(), control }) };
+  };
+
+  it('after a Take control press, the user pause opens ControlView directly', async () => {
+    const e = env({ grant: true });
+    const c = withControl(e);
+    const r = render(<Card payload={live()} browser={c.api()} />);
+    await act(async () => { fireEvent.click(r.getByRole('button', { name: 'Take control' })); await tick(); });
+    expect(c.control).toHaveBeenCalledWith('t');
+    r.rerender(<Card payload={userWait()} browser={c.api()} />);
+    // No sign-in panel on the way in.
+    expect(r.queryByRole('button', { name: 'Take over' })).toBeNull();
+    expect(r.queryByRole('region', { name: 'Sign in to app.example.com' })).toBeNull();
+    await act(async () => { await tick(); });
+    r.rerender(<Card payload={userWait()} browser={c.api()} />);
+    expect(e.requests).toHaveBeenCalledWith('fullscreen');
+    const panel = r.getByRole('region', { name: 'Frontier browser panel' });
+    expect(panel.querySelector('.fc-ctl-title')!.textContent).toBe("You're in control · the agent is paused");
+    expect(panel.textContent).not.toContain('signed in');
+    r.getByRole('button', { name: 'Done, resume task' });
+    expect(r.queryByRole('region', { name: 'Sign in to app.example.com' })).toBeNull();
+  });
+
+  it('no Take control while waiting', () => {
+    const e = env();
+    const c = withControl(e);
+    const r = render(<Card payload={mk()} browser={c.api()} />);
+    expect(r.queryByRole('button', { name: 'Take control' })).toBeNull();
+    r.rerender(<Card payload={userWait()} browser={c.api()} />);
+    expect(r.queryByRole('button', { name: 'Take control' })).toBeNull();
+  });
+
+  it('a user pause this card did not request shows the panel with Take over', async () => {
+    const e = env({ grant: true });
+    const c = withControl(e);
+    const r = render(<Card payload={userWait()} browser={c.api()} />);
+    expect(r.container.querySelector('.fc-signin')!.textContent).toContain('The agent is paused so you can drive.');
+    expect(r.container.querySelector('.fc-signin')!.textContent).not.toContain('Sign in');
+    await act(async () => { fireEvent.click(r.getByRole('button', { name: 'Take over' })); await tick(); });
+    r.rerender(<Card payload={userWait()} browser={c.api()} />);
+    expect(r.container.querySelector('.fc-ctl-title')!.textContent).toBe("You're in control · the agent is paused");
+  });
+
+  it('a sign-in wait after a press is still a sign-in: the panel, not the control view', async () => {
+    const e = env({ grant: true });
+    const c = withControl(e);
+    const r = render(<Card payload={live()} browser={c.api()} />);
+    await act(async () => { fireEvent.click(r.getByRole('button', { name: 'Take control' })); await tick(); });
+    r.rerender(<Card payload={mk()} browser={c.api()} />);
+    await act(async () => { await tick(); });
+    r.getByRole('region', { name: 'Sign in to app.example.com' });
+    r.getByRole('button', { name: 'Take over' });
+  });
+
+  it('a form wait never enters the control view, even with user set and a press pending', async () => {
+    const e = env({ grant: true });
+    const c = withControl(e);
+    const r = render(<Card payload={live()} browser={c.api()} />);
+    await act(async () => { fireEvent.click(r.getByRole('button', { name: 'Take control' })); await tick(); });
+    r.rerender(<Card payload={mk({ browser: { state: 'waiting', site: 'a.io', form: true, user: true } })} browser={c.api()} />);
+    await act(async () => { await tick(); });
+    expect(r.queryByRole('region', { name: 'Frontier browser panel' })).toBeNull();
+    r.getByRole('region', { name: FORM_TITLE });
+  });
+
+  it('closing the control view after a direct entry returns focus to Take over', async () => {
+    const e = env({ grant: true });
+    const c = withControl(e);
+    const r = render(<Card payload={live()} browser={c.api()} />);
+    await act(async () => { fireEvent.click(r.getByRole('button', { name: 'Take control' })); await tick(); });
+    r.rerender(<Card payload={userWait()} browser={c.api()} />);
+    await act(async () => { await tick(); });
+    await act(async () => { fireEvent.click(r.getByRole('button', { name: 'Close the panel' })); await tick(); });
+    expect(document.activeElement).toBe(r.getByRole('button', { name: 'Take over' }));
+    expect(r.container.querySelector('.fc-signin')!.textContent).toContain('The agent is paused so you can drive.');
+  });
+});

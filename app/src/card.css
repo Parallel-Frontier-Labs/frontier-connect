@@ -386,6 +386,13 @@ button:disabled { cursor: default; }
 .fc-bv-site { flex: 1; min-width: 0; font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
 .fc-bv-btn { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid var(--input); border-radius: 8px; background: var(--card); font: 500 12px var(--sans); color: var(--fg); }
 .fc-bv-btn:hover { background: var(--soft); border-color: var(--rule); }
+.fc-bv-btn:disabled { cursor: default; color: var(--muted); background: var(--soft); }
+.fc-bv-who { flex: 0 1 auto; min-width: 0; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fc-bv-who::before { content: '·'; margin-right: 8px; color: var(--faint-ink); }
+.fc-bv-note { margin: 0; padding: 7px 12px; font-size: 12px; color: var(--muted); background: var(--soft); border-bottom: 1px solid var(--line); }
+.fc-bv-err { color: var(--bad); }
+/* Watch only: the picture is not interactive, so no pointer cursor. */
+.fc-bv-watch .fc-bv-canvas { cursor: default; }
 .fc-bv-stage { position: relative; aspect-ratio: 16 / 10; background: var(--stage); display: flex; align-items: center; justify-content: center; }
 .fc-bv-canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
 .fc-bv-hidden { opacity: 0; }
@@ -442,6 +449,7 @@ button:disabled { cursor: default; }
   .fc-bv { margin-left: 16px; margin-right: 16px; }
   .fc-bv-in { margin: 0; }
   .fc-bv-hint { display: none; }
+  .fc-bv-bar { flex-wrap: wrap; row-gap: 6px; }
   .fc-signin-actions { padding-left: 0; }
   .fc-foot, .fc-form-foot { padding-left: 16px; padding-right: 16px; }
   .fc-loc-hint { width: 100%; }

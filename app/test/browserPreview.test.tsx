@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render } from '@testing-library/preact';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserFrame, FeedStatus } from '../src/browserFeed';
 import { Card } from '../src/view/Card';
-import { BrowserPreview, canvasSize, FULLSCREEN_REFUSED, MAX_CANVAS_EDGE, type BrowserApi, type FeedHandle } from '../src/view/BrowserPreview';
+import { BrowserPreview, canvasSize, CONTROL_MISSED, PAUSING, WATCH_BLOCKED, WATCH_HINT, FULLSCREEN_REFUSED, MAX_CANVAS_EDGE, type BrowserApi, type FeedHandle } from '../src/view/BrowserPreview';
 import type { TaskPayload } from '../src/types';
 
 const mk = (o: Partial<TaskPayload> = {}): TaskPayload => ({
@@ -42,12 +42,13 @@ afterEach(() => {
 describe('preview gating in the card', () => {
   it('shows the live preview while running with a live browser', () => {
     const a = api();
-    const { getByRole, getByText, container } = render(<Card payload={mk()} browser={a.api} />);
+    const { getByRole, queryByText, container } = render(<Card payload={mk()} browser={a.api} />);
     const region = getByRole('region', { name: 'Browser, live' });
     // No picture yet: the header says Connecting until a frame is on screen.
     expect(region.querySelector('.fc-bv-live')!.textContent).toBe('Connecting');
     expect(region.querySelector('.fc-bv-site')!.textContent).toBe('app.example.com');
-    getByText('Watch only while the agent drives.');
+    expect(region.querySelector('.fc-bv-bar')!.textContent).toContain('Frontier is driving');
+    expect(queryByText('Watch only while the agent drives.')).toBeNull();
     expect(container.querySelector('canvas')).not.toBeNull();
     expect(a.handle.start).toHaveBeenCalledTimes(1);
   });
@@ -278,5 +279,118 @@ describe('painting frames', () => {
     render(<BrowserPreview site="a.io" api={api().api} />);
     const types = [...w.mock.calls, ...d.mock.calls].map((c) => c[0]);
     expect(types.filter((t) => /^key/.test(String(t)))).toEqual([]);
+  });
+});
+
+type ControlResult = 'ok' | 'not_live' | 'busy' | 'failed';
+
+describe('watch-only header and Take control', () => {
+  const withControl = (result: ControlResult | (() => Promise<ControlResult>) = 'ok', o: Partial<BrowserApi> = {}) => {
+    const a = api();
+    const control = vi.fn(typeof result === 'function' ? result : async () => result);
+    return { ...a, control, api: { ...a.api, control, transport: () => 'direct' as const, ...o } };
+  };
+  const flush = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
+
+  it('copy is exact', () => {
+    expect(PAUSING).toBe('Pausing the agent…');
+    expect(WATCH_HINT).toBe('Watch only. Press Take control to drive.');
+    expect(CONTROL_MISSED).toBe('The agent finished this browser step before it could pause.');
+    expect(WATCH_BLOCKED).toBe('Watch only in this app. Open the task in Frontier to drive.');
+  });
+
+  it('the header says Frontier is driving inline and in full screen; no caption under the stage', () => {
+    const a = withControl();
+    const inline = render(<Card payload={mk()} browser={a.api} />);
+    expect(inline.container.querySelector('.fc-bv-bar')!.textContent).toContain('Frontier is driving');
+    expect(inline.container.querySelector('.fc-bv > .fc-bv-cap')).toBeNull();
+    inline.unmount();
+    const full = render(<Card payload={mk()} browser={{ ...a.api, mode: 'fullscreen' }} />);
+    expect(full.container.querySelector('.fc-bv-bar')!.textContent).toContain('Frontier is driving');
+    full.getByRole('button', { name: 'Take control' });
+    expect(full.queryByRole('button', { name: 'Open the browser full screen' })).toBeNull();
+  });
+
+  it('Take control posts for the task and shows Pausing the agent… disabled', async () => {
+    let answer!: (r: ControlResult) => void;
+    const a = withControl(() => new Promise<ControlResult>((res) => (answer = res)));
+    const { getByRole } = render(<Card payload={mk()} browser={a.api} />);
+    await act(async () => { fireEvent.click(getByRole('button', { name: 'Take control' })); await flush(); });
+    expect(a.control).toHaveBeenCalledWith('t');
+    const btn = getByRole('button', { name: PAUSING }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    await act(async () => { answer('ok'); await flush(); });
+    expect((getByRole('button', { name: PAUSING }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('busy (429) keeps pausing with no error', async () => {
+    const a = withControl('busy');
+    const { getByRole, queryByText, queryByRole } = render(<Card payload={mk()} browser={a.api} />);
+    await act(async () => { fireEvent.click(getByRole('button', { name: 'Take control' })); await flush(); });
+    getByRole('button', { name: PAUSING });
+    expect(queryByText(CONTROL_MISSED)).toBeNull();
+    expect(queryByRole('alert')).toBeNull();
+  });
+
+  it('not_live says the step ended first and keeps the preview, with Take control back', async () => {
+    const a = withControl('not_live');
+    const { getByRole, getByText } = render(<Card payload={mk()} browser={a.api} />);
+    await act(async () => { fireEvent.click(getByRole('button', { name: 'Take control' })); await flush(); });
+    expect(getByText(CONTROL_MISSED).getAttribute('role')).toBe('status');
+    getByRole('region', { name: 'Browser, live' });
+    expect((getByRole('button', { name: 'Take control' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('no pause within 15 s says the same and keeps the preview', async () => {
+    vi.useFakeTimers();
+    try {
+      const a = withControl('ok');
+      const { getByRole, getByText, queryByText } = render(<Card payload={mk()} browser={a.api} />);
+      await act(async () => { fireEvent.click(getByRole('button', { name: 'Take control' })); await flush(); });
+      await act(async () => { vi.advanceTimersByTime(14_900); });
+      expect(queryByText(CONTROL_MISSED)).toBeNull();
+      await act(async () => { vi.advanceTimersByTime(200); });
+      getByText(CONTROL_MISSED);
+      getByRole('region', { name: 'Browser, live' });
+      getByRole('button', { name: 'Take control' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a failed request says so and offers Take control again', async () => {
+    const a = withControl('failed');
+    const { getByRole, getByText } = render(<Card payload={mk()} browser={a.api} />);
+    await act(async () => { fireEvent.click(getByRole('button', { name: 'Take control' })); await flush(); });
+    expect(getByText("Couldn't send that. Try again.").getAttribute('role')).toBe('status');
+    getByRole('button', { name: 'Take control' });
+  });
+
+  it('a click on the canvas flashes the watch-only hint', async () => {
+    vi.useFakeTimers();
+    try {
+      const a = withControl();
+      const { container, getByText, queryByText } = render(<Card payload={mk()} browser={a.api} />);
+      expect(queryByText(WATCH_HINT)).toBeNull();
+      await act(async () => { fireEvent.click(container.querySelector('canvas')!); });
+      expect(getByText(WATCH_HINT).getAttribute('role')).toBe('status');
+      expect(a.control).not.toHaveBeenCalled();
+      await act(async () => { vi.advanceTimersByTime(5000); });
+      expect(queryByText(WATCH_HINT)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('blocked transport hides the button and says to open the task in Frontier', () => {
+    const a = withControl('ok', { transport: () => 'blocked' });
+    const { queryByRole, getByRole } = render(<Card payload={mk()} browser={a.api} />);
+    expect(queryByRole('button', { name: 'Take control' })).toBeNull();
+    expect(getByRole('region', { name: 'Browser, live' }).textContent).toContain(WATCH_BLOCKED);
+  });
+
+  it('no control in the api: no button', () => {
+    const { queryByRole } = render(<Card payload={mk()} browser={{ ...api().api, transport: () => 'direct' }} />);
+    expect(queryByRole('button', { name: 'Take control' })).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 import type { JSX } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { BrowserFrame, FeedMode, FeedStatus } from '../browserFeed';
+import type { BrowserFrame, ControlOutcome, FeedMode, FeedStatus } from '../browserFeed';
 import type { BrowserInput, SendOutcome } from '../browserInput';
 
 /** The part of BrowserFeed a view drives. */
@@ -25,6 +25,8 @@ export interface BrowserApi {
   /** Send input events to the task's browser, in order, as one request (the control view).
    * Absent: no control view. */
   input?(taskId: string, events: BrowserInput[]): Promise<SendOutcome>;
+  /** Ask the server to pause the agent so the user can drive (Take control). Absent: watch only. */
+  control?(taskId: string): Promise<ControlOutcome>;
   /** How the card reaches the server: 'direct' (frames and input work); 'reconnecting' (a direct
    * read failed but worked before on this card: retried every 30 s); 'blocked' (the host never
    * let the card reach the server directly: the browser cannot be controlled from here). */
@@ -204,25 +206,62 @@ export function ExpandIcon({ size = 12 }: { size?: number }) {
 }
 
 export const FULLSCREEN_REFUSED = 'This app kept the card in the chat.';
+export const DRIVING = 'Frontier is driving';
+export const TAKE_CONTROL = 'Take control';
+export const PAUSING = 'Pausing the agent…';
+export const WATCH_HINT = 'Watch only. Press Take control to drive.';
+export const CONTROL_MISSED = 'The agent finished this browser step before it could pause.';
+export const CONTROL_FAILED = "Couldn't send that. Try again.";
+export const WATCH_BLOCKED = 'Watch only in this app. Open the task in Frontier to drive.';
+/** How long a click on the watch-only canvas shows the hint. */
+export const WATCH_HINT_MS = 3000;
 
-/** Watching the agent drive the task's browser (design boards 1 and 4): Live, the site, Full
- * screen. The header says "Connecting" until a picture is on screen (and after an empty answer),
- * and "Paused" while the preview is unavailable. */
-export function BrowserPreview({ site, api }: { site: string | null; api: BrowserApi }) {
+/** Where a Take control press stands: none, waiting for the pause, the step ended first, or the
+ * request failed. The card owns it (the pause lands after the preview is gone). */
+export type ControlPhase = 'idle' | 'pausing' | 'missed' | 'failed';
+
+/** Watching the agent drive the task's browser (design boards 1 and 4): Live, the site, "Frontier
+ * is driving", Take control and Full screen. The header says "Connecting" until a picture is on
+ * screen (and after an empty answer), and "Paused" while the preview is unavailable. The header
+ * carries the watch-only wording, so full screen shows it too. */
+export function BrowserPreview({
+  site,
+  api,
+  control,
+}: {
+  site: string | null;
+  api: BrowserApi;
+  /** Take control (the card passes it while the agent drives). Shown only when the api can ask
+   * for control and the host lets the card reach the server. */
+  control?: { phase: ControlPhase; onPress: () => void };
+}) {
   const [frameSite, setFrameSite] = useState<string | null>(null);
   const [showing, setShowing] = useState(false);
   const [status, setStatus] = useState<FeedStatus>('ok');
   const [refused, setRefused] = useState(false);
+  const [hint, setHint] = useState(false);
+  const hintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const alive = useRef(true);
   useEffect(() => () => {
     alive.current = false;
+    if (hintTimer.current) clearTimeout(hintTimer.current);
   }, []);
   const shown = frameSite ?? site;
   const canFull = !!api.modes?.includes('fullscreen') && api.mode !== 'fullscreen';
+  const blocked = api.transport?.() === 'blocked';
+  const canControl = !!control && !!api.control && !blocked;
+  const pausing = control?.phase === 'pausing';
   const full = async () => {
     setRefused(false);
     const applied = await api.requestDisplayMode('fullscreen');
     if (alive.current) setRefused(applied !== 'fullscreen');
+  };
+  // A click on the watch-only picture says how to drive (people expect it to be interactive).
+  const flashHint = () => {
+    if (!canControl) return;
+    setHint(true);
+    if (hintTimer.current) clearTimeout(hintTimer.current);
+    hintTimer.current = setTimeout(() => setHint(false), WATCH_HINT_MS);
   };
   return (
     <div class="fc-bv">
@@ -233,6 +272,12 @@ export function BrowserPreview({ site, api }: { site: string | null; api: Browse
             {showing ? 'Live' : status !== 'ok' ? 'Paused' : 'Connecting'}
           </span>
           <span class="fc-bv-site">{shown ?? ''}</span>
+          <span class="fc-bv-who">{DRIVING}</span>
+          {canControl ? (
+            <button type="button" class="fc-bv-btn fc-bv-ctl" disabled={pausing} onClick={control!.onPress}>
+              {pausing ? PAUSING : TAKE_CONTROL}
+            </button>
+          ) : null}
           {canFull ? (
             <button type="button" class="fc-bv-btn" aria-label="Open the browser full screen" onClick={() => void full()}>
               <ExpandIcon />
@@ -240,9 +285,12 @@ export function BrowserPreview({ site, api }: { site: string | null; api: Browse
             </button>
           ) : null}
         </div>
+        {blocked ? <p class="fc-bv-note">{WATCH_BLOCKED}</p> : null}
         <BrowserStage
           api={api}
           label={shown ? `Live view of the task’s browser on ${shown}` : 'Live view of the task’s browser'}
+          stageClass="fc-bv-watch"
+          canvasProps={{ onClick: flashHint }}
           onFrame={(f) => {
             if (f?.site && f.site !== frameSite) setFrameSite(f.site);
           }}
@@ -251,7 +299,9 @@ export function BrowserPreview({ site, api }: { site: string | null; api: Browse
         />
       </section>
       {refused ? <p class="fc-bv-cap" role="status">{FULLSCREEN_REFUSED}</p> : null}
-      <p class="fc-bv-cap">Watch only while the agent drives.</p>
+      {hint && !pausing ? <p class="fc-bv-cap" role="status">{WATCH_HINT}</p> : null}
+      {control?.phase === 'missed' ? <p class="fc-bv-cap" role="status">{CONTROL_MISSED}</p> : null}
+      {control?.phase === 'failed' ? <p class="fc-bv-cap fc-bv-err" role="status">{CONTROL_FAILED}</p> : null}
     </div>
   );
 }

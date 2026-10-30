@@ -28,6 +28,9 @@ export const signInTitle = (site: string | null | undefined) => (site ? `Sign in
 export const ELSEWHERE_HOST =
   "This app can't control the task's browser. Open the task in Frontier to sign in, then resume it there.";
 export const FORM_TITLE = 'Frontier needs a few details';
+/** A pause the user asked for (Take control), from this card or another one. */
+export const USER_PAUSE_TEXT = 'The agent is paused so you can drive.';
+export const USER_CONTROL_TITLE = "You're in control · the agent is paused";
 export const ELSEWHERE_FORM = 'The task is waiting for details in its browser. Continue in Frontier to fill them in.';
 
 /** The latest "the browser needs you" line the task wrote, if any. */
@@ -87,6 +90,8 @@ export function SignInPanel({
 }) {
   const id = useId();
   const site = p.browser?.site ?? null;
+  // The user asked for this pause (Take control): not a sign-in.
+  const user = !!p.browser?.user;
   const [stopping, setStopping] = useState(false);
   const [stopErr, setStopErr] = useState(false);
   const takeBtn = useRef<HTMLButtonElement>(null);
@@ -113,9 +118,9 @@ export function SignInPanel({
         <div class="fc-signin-row">
           <LockIcon />
           <div class="fc-signin-text">
-            <h3 id={`${id}-h`} class="fc-signin-title">{elsewhere === 'form' ? FORM_TITLE : signInTitle(site)}</h3>
+            <h3 id={`${id}-h`} class="fc-signin-title">{elsewhere === 'form' ? FORM_TITLE : user ? signInTitle(null) : signInTitle(site)}</h3>
             <p class="fc-signin-body">
-              {elsewhere === 'form' ? ELSEWHERE_FORM : elsewhere === 'host' ? ELSEWHERE_HOST : takeoverText(p)}
+              {elsewhere === 'form' ? ELSEWHERE_FORM : elsewhere === 'host' ? ELSEWHERE_HOST : user ? USER_PAUSE_TEXT : takeoverText(p)}
             </p>
           </div>
         </div>
@@ -398,8 +403,14 @@ export function ControlView({
       <header class="fc-ctl-head">
         <Mark />
         <div class="fc-ctl-heading">
-          <div class="fc-ctl-title">{signInTitle(shown)}</div>
-          <div class="fc-ctl-sub">The agent is waiting. Press Resume when you're signed in.</div>
+          {p.browser?.user ? (
+            <div class="fc-ctl-title">{USER_CONTROL_TITLE}</div>
+          ) : (
+            <>
+              <div class="fc-ctl-title">{signInTitle(shown)}</div>
+              <div class="fc-ctl-sub">The agent is waiting. Press Resume when you're signed in.</div>
+            </>
+          )}
         </div>
         <button type="button" class="fc-primary" ref={doneBtn} disabled={busy} onClick={() => void done()}>
           <PlayIcon />

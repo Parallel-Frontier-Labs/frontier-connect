@@ -27,6 +27,18 @@ describe('parsePayload browser', () => {
     expect(parsePayload(once)?.browser).toEqual({ state: 'waiting', site: null, form: true });
   });
 
+  it('cleanBrowser keeps user only on waiting', () => {
+    expect(parsePayload({ ...base, browser: { state: 'waiting', site: 'a.io', user: true } })?.browser).toEqual({ state: 'waiting', site: 'a.io', user: true });
+    expect(parsePayload({ ...base, browser: { state: 'waiting', site: 'a.io', user: 'yes' } })?.browser).toEqual({ state: 'waiting', site: 'a.io' });
+    expect(parsePayload({ ...base, browser: { state: 'live', site: 'a.io', user: true } })?.browser).toEqual({ state: 'live', site: 'a.io' });
+    const once = parsePayload({ ...base, browser: { state: 'waiting', site: null, user: true } });
+    expect(parsePayload(once)?.browser).toEqual({ state: 'waiting', site: null, user: true });
+  });
+
+  it('form wins over user', () => {
+    expect(parsePayload({ ...base, browser: { state: 'waiting', site: 'a.io', form: true, user: true } })?.browser).toEqual({ state: 'waiting', site: 'a.io', form: true });
+  });
+
   it('is absent when the payload does not carry it', () => {
     expect(parsePayload(base)).not.toHaveProperty('browser');
   });

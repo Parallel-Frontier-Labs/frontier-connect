@@ -4,7 +4,7 @@ import type { AnswerOutcome, Answers, Stale } from '../bridge';
 import { cardClass } from '../format';
 import type { Status, TaskPayload } from '../types';
 import { AnsweredView, type Answered } from './Answered';
-import { BrowserPreview, type BrowserApi } from './BrowserPreview';
+import { BrowserPreview, PAUSING, type BrowserApi, type ControlPhase } from './BrowserPreview';
 import { ControlView, SignInPanel } from './BrowserTakeover';
 import { Done } from './Done';
 import { Ended } from './Ended';
@@ -28,6 +28,8 @@ export interface AnswerApi {
 
 /** How long the host gets to answer a display-mode request before the card goes on inline. */
 export const DISPLAY_MODE_WAIT_MS = 3000;
+/** After Take control, how long the card waits for the agent to pause before saying it missed. */
+export const CONTROL_PAUSE_WAIT_MS = 15_000;
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
   return new Promise((resolve) => {
@@ -189,6 +191,61 @@ export function Card({
     leaving.current = false;
     setControl(true);
   };
+  // Take control: the agent pauses at its next step and the snapshot then shows a user pause
+  // (`browser.user`). The press, not the POST answer, decides nothing: the card goes straight into
+  // the control view when that pause arrives, and says it missed on 409 or after 15 s without one.
+  const liveBrowser = !!browser && p.status === 'running' && p.browser?.state === 'live';
+  const userWait = takeover && !!p.browser?.user;
+  const [ctlPhase, setCtlPhase] = useState<ControlPhase>('idle');
+  // The pause arrived after a press: entering the control view (no sign-in panel on the way).
+  const [entering, setEntering] = useState(false);
+  const ctlTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearCtlTimer = () => {
+    if (ctlTimer.current) clearTimeout(ctlTimer.current);
+    ctlTimer.current = null;
+  };
+  useEffect(() => clearCtlTimer, []);
+  const pressControl = async () => {
+    if (!browser?.control || ctlPhase === 'pausing') return;
+    const taskId = p.task_id;
+    setCtlPhase('pausing');
+    clearCtlTimer();
+    ctlTimer.current = setTimeout(() => {
+      ctlTimer.current = null;
+      if (alive.current) setCtlPhase((ph) => (ph === 'pausing' ? 'missed' : ph));
+    }, CONTROL_PAUSE_WAIT_MS);
+    const r = await browser.control(taskId).catch(() => 'failed' as const);
+    if (!alive.current) return;
+    // ok: requested, wait for the snapshot. busy (429): an earlier request is in its window, which
+    // is still a request in flight, so keep pausing without an error.
+    if (r === 'not_live' || r === 'failed') {
+      clearCtlTimer();
+      setCtlPhase((ph) => (ph === 'pausing' ? (r === 'not_live' ? 'missed' : 'failed') : ph));
+    }
+  };
+  // The pause the user asked for arrived: straight into the control view.
+  useEffect(() => {
+    if (!userWait || ctlPhase !== 'pausing') return;
+    clearCtlTimer();
+    setCtlPhase('idle');
+    setEntering(true);
+    void takeOver().finally(() => {
+      if (alive.current) setEntering(false);
+    });
+  }, [userWait, ctlPhase]);
+  // A missed or failed note belongs to the live preview: gone with it.
+  useEffect(() => {
+    if (!liveBrowser && (ctlPhase === 'missed' || ctlPhase === 'failed')) setCtlPhase('idle');
+  }, [liveBrowser, ctlPhase]);
+  // Another task in this card: forget the press.
+  const ctlTask = useRef(p.task_id);
+  useEffect(() => {
+    if (ctlTask.current === p.task_id) return;
+    ctlTask.current = p.task_id;
+    clearCtlTimer();
+    setCtlPhase('idle');
+    setEntering(false);
+  }, [p.task_id]);
   // Leave the control view when the task stops waiting (resumed elsewhere, finished, stopped).
   useEffect(() => {
     if (control && !takeover) leave(false);
@@ -302,6 +359,13 @@ export function Card({
         <PausedSteps payload={p} />
       </div>
     );
+  } else if (userWait && browser && (entering || ctlPhase === 'pausing')) {
+    body = (
+      <div class="fc-body">
+        <p class="fc-note" role="status">{PAUSING}</p>
+        <PausedSteps payload={p} />
+      </div>
+    );
   } else if (takeover && browser) {
     body = <SignInPanel payload={p} api={browser} onTakeOver={() => void takeOver()} focus={refocus} reconnecting={reconnecting} />;
   } else if (elsewhere && browser) {
@@ -328,7 +392,9 @@ export function Card({
           </div>
         ) : null}
         {p.plan.length ? <PlanProgress payload={p} /> : <NoPlan payload={p} />}
-        {browser && p.status === 'running' && p.browser?.state === 'live' ? <BrowserPreview site={p.browser.site} api={browser} /> : null}
+        {liveBrowser && browser ? (
+          <BrowserPreview site={p.browser!.site} api={browser} control={{ phase: ctlPhase, onPress: () => void pressControl() }} />
+        ) : null}
       </>
     );
   }

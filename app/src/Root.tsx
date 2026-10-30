@@ -4,7 +4,7 @@ import { cardClass } from './format';
 import { Generations, type Guarded, type Tag } from './generation';
 import { createHostBridge, LINK_FAILED, LIST_FAILED } from './hostBridge';
 import { appendPage, type ListPayload } from './list';
-import { BrowserFeed, postInput, sendHostReport, type FrameSource } from './browserFeed';
+import { BrowserFeed, postControl, postInput, sendHostReport, type FrameSource } from './browserFeed';
 import type { BrowserApi, Transport } from './view/BrowserPreview';
 import { Poller } from './poller';
 import { Card, type AnswerApi } from './view/Card';
@@ -278,6 +278,10 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
       async input(taskId, events) {
         const source = frameSource();
         return source ? postInput(source, taskId, events) : 'failed';
+      },
+      async control(taskId) {
+        const source = frameSource();
+        return source ? postControl(source, taskId) : 'failed';
       },
       refresh: () => poller.current?.poke(),
       transport: () => transport,

@@ -48,6 +48,11 @@ export function inputUrl(viewUrl: string): string | null {
   return v ? `${v.issuer}/v1/runs/${v.id}/browser/input` : null;
 }
 
+export function controlUrl(viewUrl: string): string | null {
+  const v = splitView(viewUrl);
+  return v ? `${v.issuer}/v1/runs/${v.id}/browser/control` : null;
+}
+
 export function hostReportUrl(viewUrl: string): string | null {
   const v = splitView(viewUrl);
   return v ? `${v.issuer}/v1/connect/host-report` : null;
@@ -432,6 +437,49 @@ export async function postInput(
       const after = raw ? Number(raw) : NaN;
       return { retryAfterMs: Number.isFinite(after) && after >= 0 ? Math.min(after, 5) * 1000 : 1000 };
     }
+    if (res.status === 401 && attempt === 0) {
+      const renewed = await source.renewToken().catch(() => false);
+      if (renewed) continue;
+    }
+    return 'failed';
+  }
+  return 'failed';
+}
+
+/** What a Take control request got: requested (`ok`, not yet paused), the browser step already
+ * ended (`not_live`), rate limited (`busy`: an earlier request is still in its window), or failed. */
+export type ControlOutcome = 'ok' | 'not_live' | 'busy' | 'failed';
+
+/**
+ * Ask the server to pause the agent so the user can drive (POST <issuer>/v1/runs/<id>/browser/control).
+ * 202 means requested, not paused: the snapshot says when the pause lands. Bound to `taskId` like
+ * postInput (nothing goes to another task, checked before every request), a refused token is renewed
+ * through the Poller once, and the request is aborted after FEED_TIMEOUT_MS.
+ */
+export async function postControl(
+  source: FrameSource, taskId: string, fetchImpl: typeof fetch = (...a) => fetch(...a),
+): Promise<ControlOutcome> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const view = source.view();
+    const url = view ? controlUrl(view.url) : null;
+    if (!view || !url || view.taskId !== taskId) return 'failed';
+    const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+    const t = ctl ? setTimeout(() => ctl.abort(), FEED_TIMEOUT_MS) : null;
+    let res: Response;
+    try {
+      res = await fetchImpl(url, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${view.token}` },
+        ...(ctl ? { signal: ctl.signal } : {}),
+      });
+    } catch {
+      return 'failed';
+    } finally {
+      if (t !== null) clearTimeout(t);
+    }
+    if (res.ok) return 'ok';
+    if (res.status === 409) return 'not_live';
+    if (res.status === 429) return 'busy';
     if (res.status === 401 && attempt === 0) {
       const renewed = await source.renewToken().catch(() => false);
       if (renewed) continue;
