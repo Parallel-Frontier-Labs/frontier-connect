@@ -66,6 +66,9 @@ export interface Bridge {
   /** Ask the host to open `url` in the user's browser (MCP Apps `ui/open-link`). False when the
    * host has no link support or declined: the card then shows the link itself. */
   openLink(url: string): Promise<boolean>;
+  /** Ask the host to save bytes the card holds (MCP Apps `ui/download-file`; the host confirms). False
+   * when the host does not offer it, declined, or failed. Only ever called from a user's click. */
+  downloadFile?(name: string, mime: string, base64: string): Promise<boolean>;
   /** Display modes the host offers (MCP Apps `availableDisplayModes`); undefined when it does not say. */
   displayModes?(): string[] | undefined;
   /** The display mode the card is shown in now: 'inline' when the host does not say. */

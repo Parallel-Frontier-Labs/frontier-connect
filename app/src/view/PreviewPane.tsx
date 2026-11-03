@@ -1,14 +1,30 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
+import type { Deliverable } from '../types';
 import type { PdfDoc, SheetData } from '../../viewers/types';
 import { Markdown } from '../markdown';
 import type { FileBytes } from '../preview/fetchFile';
 import { framedHtml, FRAME_SANDBOX } from '../preview/frame';
 import { HTML_FRAME, kindOf } from '../preview/kind';
+import { hrefName, readFrameMessage, resolveSibling, safeName, type FrameMessage } from '../preview/frameMessage';
 import type { loadViewer } from '../preview/loader';
 import { DownloadNote, useDownloads, type DownloadApi } from './downloads';
 import { DownloadIcon } from './icons';
 
-export interface PreviewApi { bytes(path: string): Promise<FileBytes>; load: typeof loadViewer }
+export interface PreviewApi {
+  bytes(path: string): Promise<FileBytes>;
+  load: typeof loadViewer;
+  /** The host's ui/open-link: true when it opened the URL. */
+  openLink(url: string): Promise<boolean>;
+  /** The host's ui/download-file for bytes the card holds: true when the host accepted. */
+  saveBytes(name: string, mime: string, base64: string): Promise<boolean>;
+}
+
+export const PAGE_DOWNLOAD_UNAVAILABLE = "This page's download isn't available here.";
+/** The card's own question before a page's web link leaves: the frame and its activation are untrusted. */
+export const LINK_CONFIRM = 'This page wants to open';
+/** Open link stays disabled this long after the address appears or changes, so a page cannot swap it under the click. */
+export const LINK_CONFIRM_ARM_MS = 750;
+export const notFoundLine = (name: string) => `Couldn't find ${name} among this task's files.`;
 
 /** Whether and how the card previews a delivered file: full screen, beside the task (hosts that offer full screen). */
 export interface PreviewGate {
@@ -26,8 +42,15 @@ export interface PreviewGate {
 
 export const NO_PREVIEW: PreviewGate = {
   enabled: false, mode: 'inline', open: async () => false, close: async () => {},
-  api: { bytes: async () => ({ kind: 'failed', message: '' }), load: (() => Promise.reject(new Error('viewer unavailable'))) as unknown as PreviewApi['load'] },
+  api: {
+    bytes: async () => ({ kind: 'failed', message: '' }),
+    load: (() => Promise.reject(new Error('viewer unavailable'))) as unknown as PreviewApi['load'],
+    openLink: async () => false,
+    saveBytes: async () => false,
+  },
 };
+
+type FrameNote = { kind: 'text'; text: string } | { kind: 'link'; url: string } | { kind: 'confirm'; url: string };
 
 type Render = (n: number, c: HTMLCanvasElement, w: number) => Promise<{ missingImages: boolean } | void>;
 type Ready =
@@ -36,15 +59,68 @@ type Ready =
 type State = { s: 'loading' } | { s: 'too_large' } | { s: 'none' } | { s: 'failed'; message: string } | { s: 'ready'; v: Ready };
 const NOT_HERE = "Couldn't open this file here.";
 
-export function PreviewPane({ file, api, download, onClose }: { file: { path: string; name: string }; api: PreviewApi; download: DownloadApi; onClose: () => void }) {
+export function PreviewPane({ file, files = [], api, download, onClose }: { file: { path: string; name: string }; files?: Deliverable[]; api: PreviewApi; download: DownloadApi; onClose: () => void }) {
   const [st, setSt] = useState<State>({ s: 'loading' });
   const [attempt, setAttempt] = useState(0);
   // The same download states as the Files list: Preparing…, a failure with Retry, or a link to click.
   const dl = useDownloads(download);
   const preparing = dl.busy.has(file.path);
-  const note = dl.note && dl.note.path === file.path ? dl.note : null;
+  const note = dl.note;
   const current = useRef(file.path);
   current.current = file.path;
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const [frameNote, setFrameNote] = useState<FrameNote | null>(null);
+  const acting = useRef(false);
+  // Latest props for the listener, which is registered once per file.
+  const ctx = useRef({ files, api, run: dl.run });
+  ctx.current = { files, api, run: dl.run };
+  useEffect(() => {
+    const perform = async (m: FrameMessage) => {
+      const { files: fs, api: a, run } = ctx.current;
+      setFrameNote(null);
+      if (m.kind === 'file') {
+        const hit = resolveSibling(file.path, m.href, fs);
+        if (!hit) { setFrameNote({ kind: 'text', text: notFoundLine(hrefName(m.href)) }); return; }
+        await run(hit.path, hit.name);
+      } else if (m.kind === 'link') {
+        // Never open from the message: opening the preview leaves the card activated, so a page could
+        // post on load. Only the card's Open link button (a gesture in the card) reaches ui/open-link.
+        setFrameNote({ kind: 'confirm', url: m.href });
+      } else {
+        const ok = m.base64 ? await a.saveBytes(safeName(m.name), m.mime || 'application/octet-stream', m.base64) : false;
+        if (!ok) setFrameNote({ kind: 'text', text: PAGE_DOWNLOAD_UNAVAILABLE });
+      }
+    };
+    const onMessage = (e: MessageEvent) => {
+      const f = frameRef.current;
+      if (!f || e.source !== f.contentWindow) return;
+      const m = readFrameMessage(e.data);
+      if (!m || acting.current) return;
+      // The frame's own gate is a courtesy, not a boundary: page script can post too.
+      if ((navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation?.isActive === false) return;
+      acting.current = true;
+      void perform(m).catch(() => {}).finally(() => { acting.current = false; });
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [file.path]);
+  // Armed for one address only, so a swapped address renders disabled at once (no effect lag).
+  const [armedUrl, setArmedUrl] = useState<string | null>(null);
+  const confirmUrl = frameNote && frameNote.kind === 'confirm' ? frameNote.url : null;
+  const armed = confirmUrl !== null && armedUrl === confirmUrl;
+  useEffect(() => {
+    setArmedUrl(null);
+    if (confirmUrl === null) return;
+    const t = setTimeout(() => setArmedUrl(confirmUrl), LINK_CONFIRM_ARM_MS);
+    return () => clearTimeout(t);
+  }, [confirmUrl]);
+  const openConfirmed = async (url: string) => {
+    if (!armed) return;
+    setFrameNote(null);
+    let ok = false;
+    try { ok = await ctx.current.api.openLink(url); } catch { ok = false; }
+    if (!ok) setFrameNote({ kind: 'link', url });
+  };
   useEffect(() => {
     const path = file.path;
     const kind = kindOf(file.name);
@@ -93,12 +169,23 @@ export function PreviewPane({ file, api, download, onClose }: { file: { path: st
         <button type="button" class="fc-toggle" onClick={onClose}>Close preview</button>
       </header>
       {note ? <div class="fc-pv-dl"><DownloadNote note={note} retry={dl.run} /></div> : null}
+      {frameNote ? (
+        <div class="fc-pv-dl">
+          {frameNote.kind === 'text'
+            ? <p class="fc-dlnote" role="status"><span class="fc-muted">{frameNote.text}</span></p>
+            : frameNote.kind === 'confirm'
+            ? <p class="fc-dlnote" role="status"><span class="fc-muted">{LINK_CONFIRM}</span> <code class="fc-pv-url">{frameNote.url}</code>{' '}
+                <button type="button" class="fc-toggle" disabled={!armed} aria-disabled={armed ? undefined : 'true'} onClick={() => void openConfirmed(frameNote.url)}>Open link</button>{' '}
+                <button type="button" class="fc-toggle" onClick={() => setFrameNote(null)}>Cancel</button></p>
+            : <p class="fc-dlnote" role="status"><span class="fc-muted">Open this link:</span> <a class="fc-dllink" href={frameNote.url} target="_blank" rel="noopener noreferrer">{frameNote.url}</a></p>}
+        </div>
+      ) : null}
       <div class="fc-pv-body">
         {st.s === 'loading' ? <p class="fc-muted" role="status">{`Opening ${file.name}…`}</p>
           : st.s === 'too_large' ? <p class="fc-muted">This file is too large to preview (over 25 MB).</p>
           : st.s === 'none' ? <p class="fc-muted">No preview for this kind of file.</p>
           : st.s === 'failed' ? <p class="fc-err" role="alert">{st.message} <button type="button" class="fc-toggle" onClick={() => setAttempt((n) => n + 1)}>Retry</button></p>
-          : <Body v={st.v} name={file.name} />}
+          : <Body v={st.v} name={file.name} frameRef={frameRef} />}
       </div>
     </section>
   );
@@ -108,7 +195,7 @@ function freePdf(d: PdfDoc) {
   try { void Promise.resolve(d.destroy?.()).catch(() => {}); } catch { /* already gone */ }
 }
 
-function Body({ v, name }: { v: Ready; name: string }) {
+function Body({ v, name, frameRef }: { v: Ready; name: string; frameRef: { current: HTMLIFrameElement | null } }) {
   if (v.k === 'sheet') return <Sheets sheets={v.sheets} />;
   if (v.k === 'pdf') return <Pdf pages={v.pages} render={v.render} />;
   if (v.k === 'docx') return <div class="fc-pv-doc" dangerouslySetInnerHTML={{ __html: v.html }} />;
@@ -116,7 +203,7 @@ function Body({ v, name }: { v: Ready; name: string }) {
   if (v.k === 'image') return <Img bytes={v.bytes} />;
   if (v.k === 'html') {
     return HTML_FRAME
-      ? <iframe class="fc-pv-frame" sandbox={FRAME_SANDBOX} srcdoc={framedHtml(v.text)} title={name} />
+      ? <iframe ref={frameRef} class="fc-pv-frame" sandbox={FRAME_SANDBOX} srcdoc={framedHtml(v.text)} title={name} />
       : <><p class="fc-muted">Showing this page's source. Download it to open it in your browser.</p><pre class="fc-pv-text">{v.text}</pre></>;
   }
   return <pre class="fc-pv-text">{v.text}</pre>;

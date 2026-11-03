@@ -52,6 +52,8 @@ const modesOf = (ctx: Ctx): string[] | undefined =>
  * -> CallToolResult, `app.getHostCapabilities()?.serverTools` (the host proxies app tool calls),
  * `app.getHostContext()?.theme`, `app.onhostcontextchanged`, `app.openLink({ url })` -> `{ isError? }`
  * (`ui/open-link`; offered when `getHostCapabilities()?.openLinks` is set),
+ * `app.downloadFile({ contents })` -> `{ isError? }` (`ui/download-file`; offered when
+ * `getHostCapabilities()?.downloadFile` is set),
  * `app.requestDisplayMode({ mode })` -> `{ mode }` (the mode the host applied), `app.getHostVersion()`
  * -> `{ name, version }`, host context `displayMode`, `availableDisplayModes`, `platform`,
  * `containerDimensions`.
@@ -312,6 +314,17 @@ export function createHostBridge(
       if (!app.getHostCapabilities?.()?.openLinks || typeof app.openLink !== 'function') return false;
       try {
         const r = await app.openLink({ url });
+        return !r?.isError;
+      } catch {
+        return false;
+      }
+    },
+    async downloadFile(name, mime, base64): Promise<boolean> {
+      if (!app.getHostCapabilities?.()?.downloadFile || typeof app.downloadFile !== 'function') return false;
+      try {
+        const r = await app.downloadFile({
+          contents: [{ type: 'resource', resource: { uri: `file:///${encodeURIComponent(name)}`, mimeType: mime, blob: base64 } }],
+        });
         return !r?.isError;
       } catch {
         return false;

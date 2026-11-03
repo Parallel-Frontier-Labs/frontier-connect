@@ -16,7 +16,7 @@ function gate(over: Partial<PreviewGate> = {}): PreviewGate & { setMode(m: strin
     enabled: true, mode: 'inline',
     open: vi.fn(async () => { g.mode = 'fullscreen'; return true; }),
     close: vi.fn(async () => { g.mode = 'inline'; }),
-    api: { bytes: vi.fn(async () => ({ kind: 'ok', bytes: new TextEncoder().encode('note body') })), load: vi.fn(async () => { throw new Error('x'); }) },
+    api: { bytes: vi.fn(async () => ({ kind: 'ok', bytes: new TextEncoder().encode('note body') })), load: vi.fn(async () => { throw new Error('x'); }), openLink: vi.fn(async () => false), saveBytes: vi.fn(async () => false) },
     ...over,
   };
   g.setMode = (m: string) => { g.mode = m; };

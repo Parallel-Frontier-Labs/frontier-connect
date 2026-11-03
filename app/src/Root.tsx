@@ -318,7 +318,12 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
       enabled, mode: displayMode,
       open: async () => (await (b.requestDisplayMode?.('fullscreen') ?? Promise.resolve('inline'))) === 'fullscreen',
       close: async () => { await b.requestDisplayMode?.('inline'); },
-      api: { bytes: (path) => fetchFileBytes((p) => b.fileLink(taskRef.current ?? '', p), path), load: loadViewer },
+      api: {
+        bytes: (path) => fetchFileBytes((p) => b.fileLink(taskRef.current ?? '', p), path),
+        load: loadViewer,
+        openLink: (url) => withTimeout(b.openLink(url), OPEN_LINK_WAIT_MS).catch(() => false),
+        saveBytes: (name, mime, base64) => (b.downloadFile ? b.downloadFile(name, mime, base64) : Promise.resolve(false)),
+      },
       safeArea: b.safeArea?.(),
     };
   }, [canAnswer, modes, displayMode]);

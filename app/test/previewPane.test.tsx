@@ -7,6 +7,8 @@ const dl = { enabled: true, get: vi.fn(async () => ({ kind: 'opened' as const })
 const api = (over: Partial<PreviewApi> = {}): PreviewApi => ({
   bytes: vi.fn(async () => ({ kind: 'ok' as const, bytes: new TextEncoder().encode('hello') })),
   load: vi.fn(async () => { throw new Error('viewer unavailable'); }) as unknown as PreviewApi['load'],
+  openLink: vi.fn(async () => false),
+  saveBytes: vi.fn(async () => false),
   ...over,
 });
 

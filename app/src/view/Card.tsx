@@ -411,7 +411,7 @@ export function Card({
         {split && pv ? (
           <div class="fc-split-side">
             {narrow ? <button type="button" class="fc-toggle" onClick={() => leavePreview(false)}>Back to the task</button> : null}
-            <PreviewPane key={pv.path} file={pv} api={preview.api} download={download ?? NO_DOWNLOADS} onClose={() => leavePreview(true)} />
+            <PreviewPane key={pv.path} file={pv} files={p.deliverables} api={preview.api} download={download ?? NO_DOWNLOADS} onClose={() => leavePreview(true)} />
           </div>
         ) : null}
       </div>

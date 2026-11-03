@@ -9,6 +9,8 @@ afterEach(cleanup);
 const api: PreviewApi = {
   bytes: async () => ({ kind: 'ok' as const, bytes: new TextEncoder().encode('hello') }),
   load: (async () => { throw new Error('viewer unavailable'); }) as unknown as PreviewApi['load'],
+  openLink: vi.fn(async () => false),
+  saveBytes: vi.fn(async () => false),
 };
 const pane = (download: DownloadApi) =>
   render(<PreviewPane file={{ path: 'out/notes.txt', name: 'notes.txt' }} api={api} download={download} onClose={() => {}} />);

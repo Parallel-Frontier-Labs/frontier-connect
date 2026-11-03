@@ -240,4 +240,22 @@ describe('createHostBridge', () => {
     expect(await b.deleteTask('t1')).toEqual({ kind: 'failed', message: DELETE_FAILED });
     expect(app.callServerTool).toHaveBeenCalledTimes(5);
   });
+
+  it('downloads through ui/download-file only when the host offers it', async () => {
+    const downloadFile = vi.fn().mockResolvedValue({});
+    const off = createHostBridge(fake({ getHostCapabilities: vi.fn(() => ({})), downloadFile }));
+    expect(await off.downloadFile!('a.csv', 'text/csv', 'YSxi')).toBe(false);
+    expect(downloadFile).not.toHaveBeenCalled();
+
+    const on = createHostBridge(fake({ getHostCapabilities: vi.fn(() => ({ downloadFile: {} })), downloadFile }));
+    expect(await on.downloadFile!('my list.csv', 'text/csv', 'YSxi')).toBe(true);
+    expect(downloadFile).toHaveBeenCalledWith({
+      contents: [{ type: 'resource', resource: { uri: 'file:///my%20list.csv', mimeType: 'text/csv', blob: 'YSxi' } }],
+    });
+
+    downloadFile.mockResolvedValueOnce({ isError: true });
+    expect(await on.downloadFile!('a.csv', 'text/csv', 'YSxi')).toBe(false);
+    downloadFile.mockRejectedValueOnce(new Error('gone'));
+    expect(await on.downloadFile!('a.csv', 'text/csv', 'YSxi')).toBe(false);
+  });
 });

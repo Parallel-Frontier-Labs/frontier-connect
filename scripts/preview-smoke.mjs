@@ -202,11 +202,12 @@ try {
   if (seen.script !== true || seen.mode !== 'CSS1Compat' || seen.net !== 'blocked') fail(`html: ${JSON.stringify(seen)}`);
   if (seen.rtc !== 'undefined') fail(`html: RTCPeerConnection is ${seen.rtc}`);
   // The font link and the image are refused by the CSP: Chromium reports either a requestfailed (csp) or, when
-  // it refuses before creating the request (as under the card's own policy), a "Refused to load" console error.
+  // it refuses before creating the request (as under the card's own policy), a console error worded
+  // "Refused to load …" or, in newer Chromium, "Loading the … violates …".
   // A CSP-blocked fetch() never leaves the page; it is covered by net:'blocked' above and the no-response check below.
   for (const u of ['https://fonts.googleapis.com/css2?family=Inter', 'https://example.com/x.png']) {
     const f = failed.find((x) => x.url === u);
-    const refused = consoleErrors.some((m) => m.startsWith('Refused to load') && m.includes(`'${u}'`));
+    const refused = consoleErrors.some((m) => (m.startsWith('Refused to load') || (m.startsWith('Loading the') && /Content Security Policy/.test(m))) && m.includes(`'${u}'`));
     if (!(f && /csp/i.test(f.err)) && !refused) fail(`html: ${u} not refused by the csp: ${JSON.stringify({ failed, consoleErrors })}`);
   }
   const outside = responses.filter((u) => !u.startsWith('data:') && !u.startsWith(base));
@@ -214,8 +215,48 @@ try {
   results.html = 'ok';
   if (errors.length) fail(`page errors: ${errors}`);
 
+  // Frame actions: a sibling link, page-built CSV buttons (attached and detached anchors) and a web link each
+  // post one message on a real click, and a scripted click on load posts nothing (no user activation).
+  const actionsPage = `<!doctype html><html><body>
+<a id="wb" href="Book_2026-10.xlsx">Workbook</a>
+<button id="csv" onclick="var a=document.createElement('a');a.href=window.URL.createObjectURL(new Blob(['a,b'],{type:'text/csv'}));a.download='list.csv';document.body.appendChild(a);a.click();a.remove()">CSV</button>
+<button id="det" onclick="var a=document.createElement('a');a.href=window.URL.createObjectURL(new Blob(['c,d'],{type:'text/csv'}));a.download='detached.csv';a.click()">Detached CSV</button>
+<a id="web" href="https://example.com/source">Source</a>
+<a id="top" href="#top">Top</a>
+<script>var s=document.createElement('a');s.href='Auto.xlsx';document.body.appendChild(s);s.click();</script>
+</body></html>`;
+  await page.evaluate(({ srcdoc, sandbox }) => {
+    window.__fa = [];
+    addEventListener('message', (e) => { if (e.data && e.data.type === 'frontier:frame') window.__fa.push(e.data); });
+    const f = document.createElement('iframe');
+    f.id = 'fa';
+    f.setAttribute('sandbox', sandbox);
+    f.srcdoc = srcdoc;
+    document.body.appendChild(f);
+  }, { srcdoc: framedHtml(actionsPage), sandbox: FRAME_SANDBOX });
+  await page.waitForTimeout(500);
+  const onLoad = await page.evaluate(() => window.__fa.length);
+  if (onLoad !== 0) fail(`frame actions: ${onLoad} message(s) without a click`);
+  const fa = page.frameLocator('#fa');
+  for (const id of ['#wb', '#csv', '#det', '#web', '#top']) await fa.locator(id).click();
+  await page.waitForTimeout(500);
+  const got = await page.evaluate(() => window.__fa);
+  const want = [
+    { type: 'frontier:frame', v: 1, kind: 'file', href: 'Book_2026-10.xlsx' },
+    { type: 'frontier:frame', v: 1, kind: 'download', name: 'list.csv', mime: 'text/csv', base64: 'YSxi' },
+    { type: 'frontier:frame', v: 1, kind: 'download', name: 'detached.csv', mime: 'text/csv', base64: 'Yyxk' },
+    { type: 'frontier:frame', v: 1, kind: 'link', href: 'https://example.com/source' },
+  ];
+  // Downloads post after an async FileReader, so arrival order is not click order: compare as sets.
+  const key = (m) => [m.kind, m.name || '', m.href || ''].join('|');
+  const sorted = (a) => [...a].sort((x, y) => (key(x) < key(y) ? -1 : key(x) > key(y) ? 1 : 0));
+  if (got.length !== want.length || JSON.stringify(sorted(got)) !== JSON.stringify(sorted(want))) fail(`frame actions: ${JSON.stringify(got)}`);
+  results.actions = 'ok';
+
   // Navigation: three framed pages try to leave with a nonce. Under the card's frame-src none reach the
   // leak server and each still runs its script; the control (meta stripped) shows the harness sees leaks.
+  // These pages test frame-src, so they are framed with the CSP and guard but without FRAME_ACTIONS, whose
+  // click interceptor would otherwise stop the scripted link before frame-src is ever involved.
   const navRun = async (cardUrl) => {
     const nonce = crypto.randomUUID();
     const p = await browser.newPage();
@@ -235,7 +276,7 @@ try {
           f.srcdoc = framed[k];
           document.body.appendChild(f);
         }
-      }), { pages: navPages(nonce), sandbox: FRAME_SANDBOX, framed: Object.fromEntries(Object.entries(navPages(nonce)).map(([k, v]) => [k, framedHtml(v)])) });
+      }), { pages: navPages(nonce), sandbox: FRAME_SANDBOX, framed: Object.fromEntries(Object.entries(navPages(nonce)).map(([k, v]) => [k, framedHtml(v, { actions: false })])) });
       await p.waitForTimeout(2000);
       const hit = leaks.filter((u) => u.includes(nonce)).map((u) => new URL(u, leakBase).searchParams.get('via'));
       return { ran: ran.sort(), hit: [...new Set(hit)].sort() };
@@ -254,7 +295,7 @@ try {
   }
   results.nav = 'ok';
 
-  console.log(`preview smoke: sheet ${results.sheet}, pdf ${results.pdf}, pdf jpx ok (${results.jpx}), docx ${results.docx}, html ${results.html} (script, CSS1Compat, net blocked, RTCPeerConnection undefined), nav ${results.nav} (href, refresh, link blocked by frame-src; control leaked all 3); card under host-like CSP (eval refused), viewers 0 violations`);
+  console.log(`preview smoke: sheet ${results.sheet}, pdf ${results.pdf}, pdf jpx ok (${results.jpx}), docx ${results.docx}, html ${results.html} (script, CSS1Compat, net blocked, RTCPeerConnection undefined), actions ${results.actions}, nav ${results.nav} (href, refresh, link blocked by frame-src; control leaked all 3); card under host-like CSP (eval refused), viewers 0 violations`);
 } catch (e) {
   console.error('preview smoke FAILED:', e.message, results);
   process.exitCode = 1;

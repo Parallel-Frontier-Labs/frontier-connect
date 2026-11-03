@@ -1,14 +1,23 @@
 import { App } from '@modelcontextprotocol/ext-apps';
 import { describe, expect, it, vi } from 'vitest';
+import { FRAME_ACTIONS } from '../src/preview/frameActions';
 import { FRAME_CSP, FRAME_GUARD, FRAME_SANDBOX, framedHtml } from '../src/preview/frame';
 import { appCapabilities, createHostBridge } from '../src/hostBridge';
 
 describe('framedHtml', () => {
   it('puts the CSP first, after a leading doctype, and keeps the page intact', () => {
-    const meta = `<meta http-equiv="Content-Security-Policy" content="${FRAME_CSP}">${FRAME_GUARD}`;
+    const meta = `<meta http-equiv="Content-Security-Policy" content="${FRAME_CSP}">${FRAME_GUARD}${FRAME_ACTIONS}`;
     expect(framedHtml('<!doctype html><p>x')).toBe(`<!doctype html>${meta}<p>x`);
     expect(framedHtml('\uFEFF  <!DOCTYPE HTML>\n<p>x')).toBe(`\uFEFF  <!DOCTYPE HTML>${meta}\n<p>x`);
     expect(framedHtml('<html><p>x')).toBe(`${meta}<html><p>x`);
+  });
+  it('can leave out the click interceptor while keeping the CSP and the guard', () => {
+    const meta = `<meta http-equiv="Content-Security-Policy" content="${FRAME_CSP}">${FRAME_GUARD}`;
+    const out = framedHtml('<!doctype html><p>x', { actions: false });
+    expect(out).toBe(`<!doctype html>${meta}<p>x`);
+    expect(out).not.toContain(FRAME_ACTIONS);
+    expect(framedHtml('<p>x', { actions: true })).toBe(framedHtml('<p>x'));
+    expect(framedHtml('<p>x')).toContain(FRAME_ACTIONS);
   });
   it('allows inline script and style only, with no network at all', () => {
     expect(FRAME_CSP).toBe("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:");

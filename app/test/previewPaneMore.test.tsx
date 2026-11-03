@@ -9,6 +9,8 @@ const enc = (s: string) => new TextEncoder().encode(s);
 const api = (over: Partial<PreviewApi> = {}): PreviewApi => ({
   bytes: vi.fn(async () => ({ kind: 'ok' as const, bytes: enc('hello') })),
   load: vi.fn(async () => { throw new Error('viewer unavailable'); }) as unknown as PreviewApi['load'],
+  openLink: vi.fn(async () => false),
+  saveBytes: vi.fn(async () => false),
   ...over,
 });
 const pane = (file: { path: string; name: string }, a: PreviewApi) => <PreviewPane file={file} api={a} download={dl} onClose={() => {}} />;
