@@ -1,0 +1,621 @@
+{
+  "tools": [
+    {
+      "name": "frontier_start_task",
+      "description": "Start a NEW Frontier task: hand Frontier a whole piece of work (research, analysis, a report or other documents, or work on the user's files such as PDFs, spreadsheets, statements or folders). After frontier_add_files or frontier_request_upload, pass the upload_id. Use it for the chat's first Frontier task or when the user asks for separate, new work. If this chat already has a Frontier task, use frontier_continue_task instead — even if unsure. Put the user's message in `instruction` exactly as they typed it, character for character: add nothing, summarize nothing, correct nothing (not \"Review the Q1 brokerage statement.\", and not your own spec of the work). Background from earlier in the chat goes in `assistant_notes`, a few lines at most. Data you gathered for the task goes in as files (frontier_request_upload first), described in `assistant_notes`; `context` only if you cannot upload.",
+      "inputSchema": {
+        "properties": {
+          "instruction": {
+            "description": "The user's message exactly as they typed it, copied character for character. Add nothing, summarize nothing, correct nothing. Anything you want to add goes in `assistant_notes`. Keep phrases the user typed that tell Frontier how to work, such as \"use Frontier's browser agent\" or \"go to <site>\": they change what Frontier does.",
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Instruction",
+            "type": "string"
+          },
+          "assistant_notes": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Background the user gave earlier in this chat that this message relies on, and one line per file you uploaded saying what it is (e.g. \"crm/accounts.csv: the Salesforce accounts export the user asked about\"). Up to 4,000 characters. Frontier shows it to its agents as notes from you, after the user's words. Never a rewrite of the request, a plan, or a list of deliverables.",
+            "title": "Assistant Notes"
+          },
+          "upload_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The task_id frontier_request_upload returned, if you uploaded files for this new task.",
+            "title": "Upload Id"
+          },
+          "skills": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Playbook skills as 'playbook/skill'.",
+            "title": "Skills"
+          },
+          "files": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Names of files already uploaded for this task. Not needed after frontier_add_files or a ticket upload.",
+            "title": "Files"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Only if you cannot upload files: data you gathered for this task that Frontier can't reach itself, as text (up to 200 KB; saved as context.md). Otherwise upload it as files.",
+            "title": "Context"
+          },
+          "may_ask": {
+            "default": false,
+            "description": "Allow Frontier to ask the user questions along the way.",
+            "title": "May Ask",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "instruction"
+        ],
+        "title": "frontier_start_taskArguments",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "frontier_continue_task",
+      "description": "Continue the existing Frontier task from this chat with the user's follow-up (same files, history and record). This is the default for any follow-up in a chat that already has a Frontier task. Only start a new task if the user explicitly asks for separate work. Follow-ups keep the skills chosen when the task started. Also the way to answer Frontier asking for files: the user adds them in the card (frontier_add_files with this task_id), then call this after the card's message. Put the user's message in `instruction` exactly as they typed it, character for character: add nothing, summarize nothing, correct nothing (not \"Review the Q1 brokerage statement.\", and not your own spec of the work). Background from earlier in the chat goes in `assistant_notes`, a few lines at most. Data you gathered for the follow-up goes in as files (frontier_request_upload with this task_id first), described in `assistant_notes`; `context` only if you cannot upload.",
+      "inputSchema": {
+        "properties": {
+          "task_id": {
+            "description": "The task id.",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Task Id",
+            "type": "string"
+          },
+          "instruction": {
+            "description": "The user's message exactly as they typed it, copied character for character. Add nothing, summarize nothing, correct nothing. Anything you want to add goes in `assistant_notes`. Keep phrases the user typed that tell Frontier how to work, such as \"use Frontier's browser agent\" or \"go to <site>\": they change what Frontier does.",
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Instruction",
+            "type": "string"
+          },
+          "assistant_notes": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Background the user gave earlier in this chat that this message relies on, and one line per file you uploaded saying what it is (e.g. \"crm/accounts.csv: the Salesforce accounts export the user asked about\"). Up to 4,000 characters. Frontier shows it to its agents as notes from you, after the user's words. Never a rewrite of the request, a plan, or a list of deliverables.",
+            "title": "Assistant Notes"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Only if you cannot upload files: data you gathered for this task that Frontier can't reach itself, as text (up to 200 KB; saved as context.md). Otherwise upload it as files.",
+            "title": "Context"
+          },
+          "files": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Names of new files uploaded to this task with frontier_request_upload. Not needed after frontier_add_files or a ticket upload.",
+            "title": "Files"
+          },
+          "may_ask": {
+            "default": false,
+            "description": "Allow Frontier to ask the user questions along the way.",
+            "title": "May Ask",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "task_id",
+          "instruction"
+        ],
+        "title": "frontier_continue_taskArguments",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "frontier_list_tasks",
+      "description": "List the user's own Frontier tasks from the last `days` days (any source), newest first, 10 at a time, with their status and where they were started. Filter by status or source; pass next_cursor to see more (up to 50).",
+      "inputSchema": {
+        "properties": {
+          "days": {
+            "anyOf": [
+              {
+                "maximum": 90,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "How many days back to look (1-90, default 7).",
+            "title": "Days"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "running",
+                  "waiting",
+                  "done",
+                  "stopped",
+                  "error"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Only tasks in this state.",
+            "title": "Status"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "frontier",
+                  "claude",
+                  "chatgpt",
+                  "codex",
+                  "copilot",
+                  "scheduled",
+                  "other"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Only tasks started from one place (frontier is the Frontier desktop app).",
+            "title": "Source"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "next_cursor from the previous page.",
+            "title": "Cursor"
+          }
+        },
+        "title": "frontier_list_tasksArguments",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "frontier_add_files",
+      "description": "Let the user pick local files or a folder for Frontier in the Frontier card. Use it when the user wants Frontier to work on their files and the Frontier plugin is not installed, or its helper could not reach Frontier. Pass the user's message exactly as they typed it as `instruction` (and the chat's task_id to add files to it). Then wait: do not upload files yourself. When the user has sent them, the card posts a message with the upload_id; then call frontier_start_task with that upload_id (or frontier_continue_task for the chat's existing task; if that tool isn't loaded yet, look it up by that exact name). If the card says it cannot upload here, fall back to frontier_request_upload with `files` (exact sizes).",
+      "inputSchema": {
+        "properties": {
+          "instruction": {
+            "description": "The user's message exactly as they typed it.",
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Instruction",
+            "type": "string"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The chat's existing Frontier task; omit for a new one.",
+            "title": "Task Id"
+          }
+        },
+        "required": [
+          "instruction"
+        ],
+        "title": "frontier_add_filesArguments",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "frontier_wait_task",
+      "description": "Wait for the next notable Frontier task update (a new step, a question, files ready, done) or until the wait time runs out, then return the current state. Call again with the returned cursor until the task is done. The live card from frontier_start_task or frontier_continue_task already shows progress, so do not expect a new card. If the task waits for the user in the card's browser, tell them to press **Take over** in the card or open the task in the Frontier app; never use frontier_answer or ask for passwords. A pause the user asked for means they are driving the browser in the card (no answer needed).",
+      "inputSchema": {
+        "properties": {
+          "task_id": {
+            "description": "The task id.",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Task Id",
+            "type": "string"
+          },
+          "after": {
+            "default": 0,
+            "description": "Cursor from the previous result; 0 for all.",
+            "minimum": 0,
+            "title": "After",
+            "type": "integer"
+          },
+          "max_wait_s": {
+            "anyOf": [
+              {
+                "maximum": 240,
+                "minimum": 5,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Longest time to wait, in seconds.",
+            "title": "Max Wait S"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "title": "frontier_wait_taskArguments",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "frontier_get_task",
+      "description": "Get the current status, plan, steps and files of a Frontier task, plus updates since `after`, for a one-off check. It does not show a card: to follow a running task, call frontier_wait_task instead. If it waits for the user in the card's browser, tell them to press **Take over** in the card or open the task in the Frontier app (not frontier_answer; never ask for passwords). A pause the user asked for means they are driving the browser in the card (no answer needed).",
+      "inputSchema": {
+        "properties": {
+          "task_id": {
+            "description": "The task id.",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Task Id",
+            "type": "string"
+          },
+          "after": {
+            "default": 0,
+            "description": "Cursor from the previous result; 0 for all.",
+            "minimum": 0,
+            "title": "After",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "title": "frontier_get_taskArguments",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "frontier_list_playbooks",
+      "description": "List the user's Frontier playbooks (their organization's saved, reviewed methods) and the skills in each. Use this whenever the user asks about their playbooks or Frontier skills, rather than looking for local files. Optionally filter by a search phrase.",
+      "inputSchema": {
+        "properties": {
+          "query": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional words to filter by.",
+            "title": "Query"
+          }
+        },
+        "title": "frontier_list_playbooksArguments",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "frontier_request_upload",
+      "description": "Get Frontier the files a task works on. Two kinds:\n- The user's own files or folders. With the Frontier plugin: call WITHOUT `files`, pass the user's message exactly as they typed it as `instruction`, then run the helper `stage --ticket <ticket_url> --root <folder>`; it uploads the folder (skipped files are listed in folder-index.md). Without the plugin, or when the helper cannot reach Frontier, prefer frontier_add_files: the user picks the files in the Frontier card.\n- Files you made for the task (data gathered from the user's other apps, exports, notes). Write each as its own file with a clear name. With the plugin, put them in one folder and stage it as above. Otherwise pass `files` (up to 50, exact sizes in bytes, optional folder `path`) and PUT each file's bytes to its put_url with the given headers.\nThen call frontier_start_task with upload_id set to the returned task_id (or, for the chat's existing task, pass its task_id here and call frontier_continue_task), and say in `assistant_notes` what each file you made is.",
+      "inputSchema": {
+        "properties": {
+          "files": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Each file as {name, mime, size} (size in bytes), optionally with its folder-relative `path`. For files you made, or the user's files when the card and helper aren't available.",
+            "title": "Files"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Add files to this existing task; omit for a new one.",
+            "title": "Task Id"
+          },
+          "instruction": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The user's message exactly as they typed it: Frontier uses it to skip files the task clearly does not need.",
+            "title": "Instruction"
+          }
+        },
+        "title": "frontier_request_uploadArguments",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "frontier_request_download",
+      "description": "Save a task's delivered files into the user's working folder, with the Frontier plugin: call this, then run the helper `fetch --ticket <ticket_url> --to <working folder>`. It saves each file at <destination>/<task folder>/<path>: one folder per task, named from suggested_dir (\"name (2)\" if another task holds that name) and reused by follow-ups. Files the user has not edited are updated in place; edited ones are kept and the new version saved alongside (kept_both). Hand the ticket_url to the helper as is; never re-type it per file. `folder` is informational (the top folder the paths share, may be null); `suggested_dir` comes from the task's title. Covers what the task has delivered so far.",
+      "inputSchema": {
+        "properties": {
+          "task_id": {
+            "description": "The task id.",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "title": "frontier_request_downloadArguments",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "frontier_answer",
+      "description": "Send the user's answer to a Frontier question or form. Only answer when the user has clearly told you what to choose; never fill in a form the user should own — the card lets them answer it.",
+      "inputSchema": {
+        "properties": {
+          "task_id": {
+            "description": "The task id.",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Task Id",
+            "type": "string"
+          },
+          "ask_id": {
+            "description": "The open question's or form's ask_id, from the task's open_ask.",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Ask Id",
+            "type": "string"
+          },
+          "answers": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            ],
+            "description": "For a question: a list with one entry per question, {questionId, kind, ...}: text {text}; single_select {optionId} or {otherText}; multi_select {optionIds, otherText?}; confirm {value: true|false}; defer {}. For a form: {values: {fieldId: value}}, or {deferred: true} when the form allows it.",
+            "title": "Answers"
+          }
+        },
+        "required": [
+          "task_id",
+          "ask_id",
+          "answers"
+        ],
+        "title": "frontier_answerArguments",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "frontier_steer",
+      "description": "Give a running Frontier task new guidance from the user (e.g. skip a section, change focus).",
+      "inputSchema": {
+        "properties": {
+          "task_id": {
+            "description": "The task id.",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Task Id",
+            "type": "string"
+          },
+          "text": {
+            "description": "The user's new direction, in their words.",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "text"
+        ],
+        "title": "frontier_steerArguments",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "frontier_stop_task",
+      "description": "Stop a running Frontier task. Work done so far is kept.",
+      "inputSchema": {
+        "properties": {
+          "task_id": {
+            "description": "The task id.",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "title": "frontier_stop_taskArguments",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      }
+    }
+  ]
+}

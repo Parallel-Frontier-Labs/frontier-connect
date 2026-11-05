@@ -489,7 +489,7 @@ button:disabled { cursor: default; }
 .fc-src { font: 10.5px var(--sans); border-radius: 4px; padding: 1px 6px; white-space: nowrap; background: #eef0f2; color: #3f4650; }
 .fc-src-frontier { background: #e6eefa; color: #1d4e89; }
 .fc-src-claude { background: #fbebdd; color: #8a4b14; }
-.fc-src-chatgpt, .fc-src-codex, .fc-src-other { background: #eef0f2; color: #3f4650; }
+.fc-src-chatgpt, .fc-src-codex, .fc-src-copilot, .fc-src-other { background: #eef0f2; color: #3f4650; }
 .fc-src-scheduled { background: #efeaf8; color: #5b3f8c; }
 [data-theme='dark'] .fc-src { background: #262d36; color: #c4ccd5; }
 [data-theme='dark'] .fc-src-frontier { background: #1a2b45; color: #a9c6ef; }

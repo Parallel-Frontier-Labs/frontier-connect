@@ -105,6 +105,18 @@ describe('TaskList', () => {
     expect(a.query).toHaveBeenLastCalledWith({ days: 30, status: null, source: null }, false);
   });
 
+  it('Microsoft Copilot rows, the App filter and a Copilot restriction that survives another filter change', async () => {
+    const a = acts();
+    const l = mkList({ items: [item(1, { source: 'copilot' })], filters: { days: 7, status: null, source: 'copilot' } });
+    const { container, getByLabelText } = render(<TaskList list={l} actions={a} />);
+    expect(container.querySelector('.fc-src.fc-src-copilot')!.textContent).toBe('Copilot');
+    const app = getByLabelText('App') as HTMLSelectElement;
+    expect(Array.from(app.options).map((o) => o.text)).toContain('Copilot');
+    fireEvent.change(getByLabelText('Status') as HTMLSelectElement, { target: { value: '3' } });
+    await flush();
+    expect(a.query).toHaveBeenLastCalledWith({ days: 7, status: 'done', source: 'copilot' }, false);
+  });
+
   it('a failed query shows its message', async () => {
     const a = acts({ query: vi.fn(async () => "Couldn't load your tasks. Try again, or ask in the chat.") });
     const { getByLabelText, getByText } = render(<TaskList list={mkList()} actions={a} />);

@@ -28,6 +28,7 @@ one started in Frontier's own app.
 | Cowork and Claude Code | The Frontier plugin (connector plus folder upload and delivery) |
 | Claude (web, Desktop) | Custom connector |
 | The Codex app | The Frontier plugin |
+| Microsoft Copilot (Cowork) | The Frontier plugin for Copilot (a .zip you upload) |
 | ChatGPT | Custom app (developer mode) |
 | Frontier's desktop app | Built in |
 | Your own AI engine | Any MCP client |
@@ -99,7 +100,7 @@ task starts only when the user asks for separate work. See [AGENTS.md](AGENTS.md
 - **Every run is recorded.** Connector runs appear in your Frontier admin dashboard alongside every
   other run, labelled with the app that started them.
 
-## The Frontier plugin (Codex and Cowork)
+## The Frontier plugin (Codex, Cowork and Microsoft Copilot)
 
 The [`plugin/`](plugin) folder is a plugin for the Codex app and for Cowork and Claude Code. It
 bundles the connector with a `frontier` skill and a small Python helper that uploads a whole local
@@ -110,6 +111,9 @@ The helper holds no credentials: it uses short-lived links handed out by your si
   **Frontier**.
 - Cowork and Claude: **Customize > Plugins > Add > Add marketplace** with this repository's URL,
   then install **Frontier** and connect it.
+- Microsoft Copilot: Copilot takes a Microsoft 365 app package instead. `python3
+  scripts/build_copilot.py` builds `dist/frontier-copilot.zip` from [`copilot/`](copilot) and the same
+  `frontier` skill; upload it in Copilot under **Cowork > Customize > Plugins > Add plugin**.
 
 See [plugin/README.md](plugin/README.md) for details.
 

@@ -3,7 +3,7 @@ import type { Status } from './types';
 /** "Your Frontier tasks": the frontier_list_tasks payload (view "list"), sanitised like a task payload. */
 export const LIST_STATUSES = ['running', 'waiting', 'done', 'stopped', 'error'] as const;
 export type ListStatus = (typeof LIST_STATUSES)[number];
-export const SOURCES = ['frontier', 'claude', 'chatgpt', 'codex', 'scheduled', 'other'] as const;
+export const SOURCES = ['frontier', 'claude', 'chatgpt', 'codex', 'copilot', 'scheduled', 'other'] as const;
 export type Source = (typeof SOURCES)[number];
 export const DAYS = [1, 7, 30, 90] as const;
 
@@ -76,7 +76,7 @@ export const LIST_STATUS_FOR_PILL: Record<ListStatus, Status> = {
   running: 'running', waiting: 'waiting_for_answer', done: 'done', stopped: 'stopped', error: 'error',
 };
 export const SOURCE_LABEL: Record<Source, string> = {
-  frontier: 'Frontier', claude: 'Claude', chatgpt: 'ChatGPT', codex: 'Codex', scheduled: 'Scheduled', other: 'Another AI app',
+  frontier: 'Frontier', claude: 'Claude', chatgpt: 'ChatGPT', codex: 'Codex', copilot: 'Copilot', scheduled: 'Scheduled', other: 'Another AI app',
 };
 /** Running or waiting: the server refuses to delete these ("Stop the task first."). */
 export const isLive = (s: ListStatus): boolean => s === 'running' || s === 'waiting';

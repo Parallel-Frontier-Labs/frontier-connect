@@ -53,8 +53,8 @@ instead.
 ## Running the helper
 
 - In Claude (Cowork, Claude Code): `python3 "${CLAUDE_SKILL_DIR}/scripts/frontier.py" ...`
-- Elsewhere (Codex): run `scripts/frontier.py` from the folder this SKILL.md is in, with its
-  full path, for example `python3 "<this skill's folder>/scripts/frontier.py" ...`.
+- Elsewhere (Codex, Microsoft Copilot): run `scripts/frontier.py` from the folder this SKILL.md
+  is in, with its full path, for example `python3 "<this skill's folder>/scripts/frontier.py" ...`.
 - On Windows use `python` or `py -3` if `python3` is not found. It needs only Python 3.
 
 The helper needs network access to `api.parallelfrontier.io` only: files move through it.
@@ -80,6 +80,22 @@ failed, and then say it in plain words. Exit codes: 0 done, 1 Frontier
 or the network refused (relay the message; retry at most once), 2 a usage problem (fix the command), 3 some files
 failed (say which, the rest are done). For a failed file the helper says why; "the link
 expired" means: ask for a new link and run again.
+
+## In Microsoft Copilot
+
+Copilot runs the same steps, with two differences:
+
+- **Short calls.** Each tool call must finish within 30 seconds, so `frontier_wait_task` returns
+  sooner there. That is normal: call it again with the new cursor until the task is done or waits
+  for the user.
+- **No task card, maybe.** If no Frontier card shows in the chat, you are the user's view of the
+  task. After each wait, tell them what changed (a new step, a question, files ready, done). Ask
+  Frontier's questions in chat and send the user's answer with `frontier_answer`. For files, use the
+  helper as above; if it can't run, put a short text (up to 200 KB) in `context`, or call
+  `frontier_request_upload` with `files` and upload each file to the link it returns. For results,
+  use the helper's fetch; if it can't run, name the deliverables and tell the user they can
+  download them from the task in the Frontier app. For a sign-in in the task's browser, send the
+  user to the task in the Frontier app. Never ask for passwords in chat.
 
 ## Rules
 

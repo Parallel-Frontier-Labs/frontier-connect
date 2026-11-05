@@ -362,6 +362,13 @@ describe('waiting without an ask', () => {
 
 describe('source chip in the header', () => {
   const base = { task_id: 't', status: 'running', title: 'Financial Plan Summary', org: 'Halcyon North' };
+  it('names Microsoft Copilot in the header', () => {
+    const p = parsePayload({ ...base, source: 'copilot' })!;
+    expect(p.source).toBe('copilot');
+    const { container } = render(<Card payload={p} />);
+    expect(container.querySelector('.fc-org .fc-src.fc-src-copilot')!.textContent).toBe('Copilot');
+    cleanup();
+  });
   it('shows the tinted source next to the org line; nothing when null or unknown', () => {
     const p = parsePayload({ ...base, source: 'codex', turn: 2 })!;
     expect(p.source).toBe('codex');

@@ -49,7 +49,8 @@ jobs:
         run: |
           set -euo pipefail
           for f in .claude-plugin/marketplace.json .agents/plugins/marketplace.json \
-                   plugin/.claude-plugin/plugin.json plugin/.mcp.json plugin/.codex-plugin/plugin.json; do
+                   plugin/.claude-plugin/plugin.json plugin/.mcp.json plugin/.codex-plugin/plugin.json \
+                   copilot/manifest.json copilot/tools/frontier-tools.json; do
             python3 -m json.tool "$f" > /dev/null
           done
       - name: Plugin helper tests

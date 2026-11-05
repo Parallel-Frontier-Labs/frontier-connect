@@ -7,7 +7,7 @@ import {
 } from '../list';
 import { Chevron, Mark } from './icons';
 
-/** The tinted source name chip (Frontier blue, Claude orange, ChatGPT/Codex grey, Scheduled violet). */
+/** The tinted source name chip (Frontier blue, Claude orange, ChatGPT/Codex/Copilot grey, Scheduled violet). */
 export function SourceChip({ source }: { source: Source }) {
   return <span class={`fc-src fc-src-${source}`}>{SOURCE_LABEL[source]}</span>;
 }

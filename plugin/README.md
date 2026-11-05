@@ -1,8 +1,8 @@
 # Frontier plugin
 
 Hand long, multi-step work on your files to [Frontier](https://parallelfrontier.io)'s agents
-from Codex or Claude (Cowork, Claude Code), follow it in a live task card, and get the finished
-files back into your folder.
+from Codex, Claude (Cowork, Claude Code) or Microsoft Copilot, follow it in a live task card,
+and get the finished files back into your folder.
 
 The plugin bundles the Frontier connector (the MCP server at `https://api.parallelfrontier.io/mcp`)
 and one skill, `frontier`, that tells the assistant how to run a task: one chat is one Frontier
@@ -31,6 +31,21 @@ helper runs, approve its network access.
 
 In Claude Code: `/plugin marketplace add Parallel-Frontier-Labs/frontier-connect`, then
 `/plugin install frontier@parallel-frontier`.
+
+**Microsoft Copilot (Cowork)**
+
+Copilot installs plugins from a Microsoft 365 app package rather than a marketplace. Build it with
+`python3 scripts/build_copilot.py` (it writes `dist/frontier-copilot.zip`: the manifest and icons in
+`copilot/`, the connector's tool list and this same `frontier` skill), or download it from the
+Connect AI apps page of your Frontier dashboard. Then:
+
+1. In Copilot, open **Cowork > Customize > Plugins > Add plugin** and upload the zip.
+2. Share it with **Only you** (an admin can add it for the whole organization from the Microsoft
+   365 admin center).
+3. Sign in with your Frontier account when Copilot first uses Frontier.
+
+`copilot/tools/frontier-tools.json` is the connector's tool list (`tools/list` of the Frontier MCP
+server, the tools the assistant may call). Regenerate it when the server's tools change.
 
 ## Use it
 
