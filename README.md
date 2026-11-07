@@ -1,21 +1,23 @@
 # Frontier Connect
 
-**Self-optimizing AI agents, from inside Claude and ChatGPT.**
+**Enterprise AI agents, held to your standard on every run, from the AI app your team already uses.**
 
 [![CI](https://github.com/Parallel-Frontier-Labs/frontier-connect/actions/workflows/ci.yml/badge.svg)](https://github.com/Parallel-Frontier-Labs/frontier-connect/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![MCP 2026-07-28](https://img.shields.io/badge/MCP-2026--07--28-black.svg)](https://modelcontextprotocol.io)
 
-[Frontier](https://parallelfrontier.io) agents do your organization's work to your standard.
-Every run is scored against your own bar, and the runtime routes each step to the most efficient model
-that clears it. Quality goes up, cost goes down, and everything the system learns stays with you.
+[Frontier](https://parallelfrontier.io) agents do your organization's work to your standard, with
+your best people's methods turned into playbooks that run the same way for everyone. Every run is
+scored against your own bar, and the runtime routes each step to the most efficient model that
+clears it. The playbooks, the scores and every improvement belong to your firm.
 
 Frontier Connect brings that runtime to the AI apps your people already use. Describe the work in
-Claude or ChatGPT, and Frontier's agents run it end to end. A live task card in the conversation
-shows the plan, progress, any questions and the finished deliverables.
+Claude, ChatGPT, Codex, Microsoft Copilot or any MCP client, and Frontier's agents run it end to end.
+A live task card in the conversation shows the plan, progress, any questions and the finished
+deliverables, and expands to a full-screen view of all your tasks.
 
 > **Status: rolling out.** The connector is in staged rollout with Frontier customers.
-> To get access, [book a demo](https://parallelfrontier.io/book).
+> To get access, [book a session](https://parallelfrontier.io/book).
 
 ## Any AI app surface, one platform beneath
 
@@ -50,7 +52,7 @@ Frontier. That is what makes the agents self-optimizing.
    surface, this connector included, picks up the better version on its next run.
 
 The runtime matches each step to the most efficient mix of open and closed models that clears your
-bar, so quality goes up while cost comes down.
+bar, so the standard holds while model spend comes down.
 
 ## What you can hand off
 
