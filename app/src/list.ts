@@ -9,12 +9,20 @@ export const DAYS = [1, 7, 30, 90] as const;
 
 export interface ListItem {
   task_id: string; title: string; status: ListStatus; started_at: string; source: Source; work_ms: number; turn: number;
+  /** A deletion tombstone exists for the row: shown faded and marked Deleted, never opened. */
+  deleted: boolean;
 }
-export interface ListFilters { days: number; status: ListStatus | null; source: Source | null }
+/** `query`: the title search the server applied (null: none). */
+export interface ListFilters { days: number; status: ListStatus | null; source: Source | null; query: string | null }
 export interface ListPayload {
   view: 'list'; items: ListItem[]; total: number; shown: number; next_cursor: string | null;
   filters: ListFilters; capped: boolean; org: string | null;
+  /** The server echoes `filters.query` (it knows title search); an older server does not. */
+  searchable: boolean;
 }
+
+/** The longest title search the server accepts. */
+export const QUERY_MAX = 100;
 
 /** The cap the server applies per query (it stops issuing cursors there). */
 export const LIST_CAP = 50;
@@ -43,6 +51,7 @@ export function parseList(v: unknown): ListPayload | null {
       source: oneOf(SOURCES, i.source) ?? 'other',
       work_ms: int(i.work_ms),
       turn: Math.max(1, Math.min(int(i.turn, 1), 10_000)),
+      deleted: i.deleted === true,
     });
   }
   return {
@@ -56,9 +65,11 @@ export function parseList(v: unknown): ListPayload | null {
       days: days >= 1 ? Math.min(days, 90) : 7,
       status: oneOf(LIST_STATUSES, f.status),
       source: oneOf(SOURCES, f.source === 'desktop' ? 'frontier' : f.source),
+      query: typeof f.query === 'string' && f.query.trim() ? f.query.trim().slice(0, QUERY_MAX) : null,
     },
     capped: r.capped === true,
     org: typeof r.org === 'string' && r.org ? r.org.slice(0, 80) : null,
+    searchable: 'query' in f,
   };
 }
 

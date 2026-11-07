@@ -7,20 +7,64 @@ import { appendPage, type ListPayload } from './list';
 import { BrowserFeed, postControl, postInput, sendHostReport, type FrameSource } from './browserFeed';
 import type { BrowserApi, Transport } from './view/BrowserPreview';
 import { Poller } from './poller';
-import { Card, type AnswerApi } from './view/Card';
+import { Card, DISPLAY_MODE_WAIT_MS, type AnswerApi } from './view/Card';
+import { DeletedCard } from './view/Deleted';
+import { FullView } from './view/FullView';
+import type { PromptState } from './view/PromptBlock';
+import type { StripApi } from './view/Strip';
 import { AddFiles } from './view/AddFiles';
 import { NO_UPLOADS, type UploadApi } from './view/UploadPanel';
 import type { AddFilesPayload } from './upload/addFiles';
 import { sendFiles } from './upload/transfer';
 import type { DownloadApi } from './view/Files';
 import { TaskList, type ListActions } from './view/TaskList';
-import type { TaskPayload } from './types';
+import { TERMINAL, type TaskPayload } from './types';
 import { NO_PREVIEW, type PreviewGate } from './view/PreviewPane';
+import { fetchPrompt } from './promptFetch';
 import { fetchFileBytes } from './preview/fetchFile';
 import { loadViewer, viewersAvailable } from './preview/loader';
 
 /** How long the host gets to open a download link before the card shows the link itself. */
 export const OPEN_LINK_WAIT_MS = 5000;
+
+/** `p`, or `fallback` once `ms` pass or it rejects. */
+function within<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const t = setTimeout(() => resolve(fallback), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      () => { clearTimeout(t); resolve(fallback); },
+    );
+  });
+}
+
+/** Below 900 px wide the two-pane view does not fit: the list stays in the card. */
+const narrowNow = () => {
+  try {
+    return !!window.matchMedia?.('(max-width: 899px)').matches;
+  } catch {
+    return false;
+  }
+};
+
+/** Wait for the frame to take its new size after a display-mode change: the next resize, or two
+ * frames, whichever comes first, and never longer than RESIZE_WAIT_MS. */
+export const RESIZE_WAIT_MS = 400;
+function settledWidth(): Promise<void> {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      window.removeEventListener('resize', finish);
+      resolve();
+    };
+    window.addEventListener('resize', finish);
+    setTimeout(finish, RESIZE_WAIT_MS);
+    const raf = typeof window.requestAnimationFrame === 'function' ? window.requestAnimationFrame.bind(window) : (f: () => void) => setTimeout(f, 16);
+    raf(() => raf(() => { if (window.innerWidth >= 900) finish(); }));
+  });
+}
 
 /** `p`, or false once `ms` pass or it rejects. */
 function withTimeout(p: Promise<boolean>, ms: number): Promise<boolean> {
@@ -35,6 +79,7 @@ function withTimeout(p: Promise<boolean>, ms: number): Promise<boolean> {
 
 export const OPEN_FAILED = "Couldn't open the task. Try again, or ask in the chat.";
 export const TASK_DELETED = 'This task was deleted.';
+export const SEARCH_UNAVAILABLE = "Search isn't available yet. Ask in the chat to find a task.";
 const STALE: Stale = { kind: 'stale' };
 
 /**
@@ -46,7 +91,8 @@ const STALE: Stale = { kind: 'stale' };
  * card moved on is dropped; and every result passes the `deleted` filter, so a task deleted from
  * the card never comes back from a late read.
  */
-type Mode = { kind: 'task'; fromList: boolean } | { kind: 'list' } | { kind: 'add' } | { kind: 'deleted'; fromList: boolean };
+type Mode = { kind: 'task'; fromList: boolean } | { kind: 'list'; back?: boolean } | { kind: 'add' } | { kind: 'deleted'; fromList: boolean }
+  | { kind: 'full'; from: 'list' | 'task' };
 
 export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: () => Bridge }) {
   const [payload, setPayload] = useState<TaskPayload | null>(null);
@@ -77,6 +123,23 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
   // One host report per card mount, once the handshake is done and a view token is known.
   const hostReady = useRef(false);
   const reported = useRef(false);
+  // The full-screen list (spec 2026-11-07): the task open in its pane, that task's prompt, and the
+  // chat's own task to come back to when the view was opened from a finished card's strip.
+  const [fullSel, setFullSel] = useState<string | null>(null);
+  const fullSelRef = useRef<string | null>(null);
+  const [prompt, setPrompt] = useState<PromptState>({ kind: 'none' });
+  const [paneNote, setPaneNote] = useState<string | null>(null);
+  const origin = useRef<TaskPayload | null>(null);
+  const modeRef = useRef<Mode>(mode);
+  modeRef.current = mode;
+  const listRef = useRef<ListPayload | null>(null);
+  listRef.current = list;
+  const exitRef = useRef<(ask: boolean) => void>(() => {});
+  // Full-view transitions read the mode before the next render: keep the ref in step at once.
+  const setModeNow = (m: Mode) => {
+    modeRef.current = m;
+    setMode(m);
+  };
 
   /** Rows of deleted tasks never come back, whichever response carries them. */
   const clean = (l: ListPayload): ListPayload => {
@@ -104,12 +167,12 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
     const guardedBridge: Bridge = {
       ...bridge,
       getTask: async (id, after) => {
-        const r = await gens.run(() => bridge.getTask(id, after), pollTag.current);
+        const r = await gens.runInView(() => bridge.getTask(id, after), pollTag.current);
         return r.stale ? null : r.value;
       },
     };
     const guardedFetch: typeof fetch = async (...a) => {
-      const r = await gens.run(() => fetch(...a), pollTag.current);
+      const r = await gens.runInView(() => fetch(...a), pollTag.current);
       return r.stale ? ({ status: 409, ok: false, json: async () => null } as unknown as Response) : r.value;
     };
     // Poller.start merges each payload into the previous one (state.merge), keeps the
@@ -126,10 +189,12 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
       bridge: guardedBridge,
       fetchImpl: guardedFetch,
       onUpdate: (next) => {
-        if (!gens.current(pollTag.current)) return;
+        // Only a navigation ends a poll session; a list query (a search beside the pane) does not.
+        if (pollTag.current.view !== gens.view) return;
         if (deleted.has(next.task_id)) {
           p.stop();
-          setMode((m) => ({ kind: 'deleted', fromList: m.kind !== 'list' && m.kind !== 'add' && m.fromList }));
+          // In the full view the pane handles a deleted task itself; the view stays.
+          setMode((m) => (m.kind === 'full' ? m : { kind: 'deleted', fromList: (m.kind === 'task' || m.kind === 'deleted') && m.fromList }));
           return;
         }
         taskRef.current = next.task_id;
@@ -150,6 +215,7 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
       startPoll(next);
     });
     bridge.onList((next) => {
+      origin.current = null; // a list the host shows is not the strip's: no way back to a card
       gens.bumpView();
       gens.bumpQuery();
       setTheme(bridge.theme());
@@ -171,7 +237,10 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
     bridge.onConnectError(() => setConnectFailed(true));
     const readModes = () => {
       setModes(bridge.displayModes?.());
-      setDisplayMode(bridge.displayMode?.() ?? 'inline');
+      const now = bridge.displayMode?.() ?? 'inline';
+      setDisplayMode(now);
+      // The host left full screen on its own (its close button): the full list closes with it.
+      if (modeRef.current.kind === 'full' && now !== 'fullscreen') exitRef.current(false);
     };
     bridge.onDisplayModeChange?.(readModes);
     bridge.onReady(() => {
@@ -239,6 +308,10 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
         const gone = () => shownTask.current !== taskId || deleted.has(taskId);
         const r = await gens.run(() => b.fileLink(taskId, path));
         if (gone()) return STALE;
+        if (r.value.kind === 'failed' && r.value.gone && modeRef.current.kind === 'task') {
+          markGone(taskId);
+          return STALE;
+        }
         if (r.value.kind === 'failed') return r.value;
         const { url, name } = r.value;
         // A host that never answers (a confirm dialog left open) or rejects: show the link itself.
@@ -340,6 +413,8 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
         if (r.stale) return null;
         const out = r.value;
         if (out.kind === 'failed') return out.message;
+        // An older server ignores `query`: its unfiltered rows must not pass for search results.
+        if (q.query && !out.list.searchable) return SEARCH_UNAVAILABLE;
         setList((prev) => (append && prev ? appendPage(prev, out.list) : { ...out.list, org: out.list.org ?? prev?.org ?? null }));
         return null;
       },
@@ -378,19 +453,202 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
         // happened meanwhile (the row is still on screen); a stale success removes the row as usual.
         return r.value;
       },
+      ...(canAnswer && modes?.includes('fullscreen') && bridgeRef.current?.requestDisplayMode
+        ? { expand: () => void expand('list') }
+        : {}),
     }),
-    [canAnswer],
+    [canAnswer, modes],
   );
+
+  /** The chat card's task no longer exists (deleted elsewhere): show the deleted card. */
+  const markGone = (taskId: string) => {
+    deleted.add(taskId);
+    stopPoll();
+    setList((prev) => prev);
+    setMode({ kind: 'deleted', fromList: false });
+  };
+
+  /** Open `taskId` in the full view's pane (null: none): its payload (polled) and its prompt. */
+  const selectInFull = async (taskId: string | null) => {
+    const b = bridgeRef.current;
+    fullSelRef.current = taskId;
+    setFullSel(taskId);
+    setPaneNote(null);
+    setPrompt({ kind: 'none' });
+    gens.bumpView();
+    stopPoll();
+    if (!b || !taskId) return;
+    if (deleted.has(taskId)) {
+      setPaneNote(TASK_DELETED);
+      return;
+    }
+    setPrompt({ kind: 'loading' });
+    const still = () => fullSelRef.current === taskId && modeRef.current.kind === 'full' && !deleted.has(taskId);
+    let r: Guarded<TaskPayload | null>;
+    try {
+      // Stale only if the view moved: a search beside the pane must not stop it loading.
+      r = await gens.runInView(() => b.getTask(taskId, 0));
+    } catch {
+      r = { stale: false, value: null };
+    }
+    if (r.stale || !still()) return;
+    const p = r.value;
+    if (!p || p.task_id !== taskId) {
+      setPaneNote(OPEN_FAILED);
+      return;
+    }
+    startPoll(p);
+    // Straight from the card with the prompt key from _meta, never through the host (spec 2026-11-07).
+    const pr = await gens.runInView(() => fetchPrompt(p.prompt_access));
+    if (pr.stale || !still()) return;
+    setPrompt(pr.value.kind === 'ok' ? { kind: 'ok', text: pr.value.prompt, truncated: pr.value.truncated } : { kind: 'none' });
+  };
+
+  /** Ask the host for full screen: true only when it applied it (and the view is wide enough). */
+  const enterFull = async (): Promise<boolean> => {
+    const b = bridgeRef.current;
+    if (!b?.requestDisplayMode) return false;
+    // The inline card is narrow by nature: measure only after the host has expanded the frame.
+    if ((await within(b.requestDisplayMode('fullscreen'), DISPLAY_MODE_WAIT_MS, 'inline')) !== 'fullscreen') return false;
+    await settledWidth();
+    if (!narrowNow()) return true;
+    void b.requestDisplayMode('inline'); // full screen on a phone-sized view: the in-card list fits better
+    return false;
+  };
+
+  /** Open the full-screen list from the inline list, or from a finished card's strip over `days`.
+   * A host that refuses full screen (or a narrow view) keeps today's in-card list instead. */
+  const expand = async (from: 'list' | 'task', days?: number) => {
+    const b = bridgeRef.current;
+    if (!b) return;
+    const chat = from === 'task' ? payload : null;
+    if (from === 'task') {
+      const r = await gens.run(() => b.listTasks({ days: days ?? 30 }));
+      if (r.stale || r.value.kind === 'failed') return;
+      const fresh = r.value.list;
+      setList({ ...fresh, org: fresh.org ?? listRef.current?.org ?? null });
+      listRef.current = fresh;
+    }
+    if (!(await enterFull())) {
+      if (from === 'task') {
+        // No full screen here: the list opens in the card, with a way back to the finished task.
+        origin.current = chat;
+        gens.bumpView();
+        stopPoll();
+        setListEpoch((e) => e + 1);
+        setModeNow({ kind: 'list', back: true });
+      }
+      return;
+    }
+    origin.current = chat;
+    setModeNow({ kind: 'full', from });
+    const first = chat?.task_id ?? listRef.current?.items.find((i) => !i.deleted && !deleted.has(i.task_id))?.task_id ?? null;
+    void selectInFull(first);
+  };
+
+  /** Leave the full view: back to the inline list, or to the chat's own task card. */
+  const exitFull = (ask: boolean) => {
+    const b = bridgeRef.current;
+    const was = modeRef.current;
+    if (was.kind !== 'full') return;
+    if (ask) void b?.requestDisplayMode?.('inline');
+    gens.bumpView();
+    stopPoll();
+    fullSelRef.current = null;
+    setFullSel(null);
+    const back = origin.current;
+    origin.current = null;
+    if (was.from === 'task' && back) {
+      if (deleted.has(back.task_id)) {
+        setModeNow({ kind: 'deleted', fromList: false });
+        setPayload(back);
+        return;
+      }
+      setModeNow({ kind: 'task', fromList: false });
+      startPoll(back);
+      return;
+    }
+    setModeNow({ kind: 'list' });
+  };
+  exitRef.current = exitFull;
+
+  /** Back from the in-card list the strip opened (no full screen) to the chat's finished task. */
+  const backToTask = () => {
+    const card = origin.current;
+    origin.current = null;
+    gens.bumpView();
+    if (!card) return;
+    if (deleted.has(card.task_id)) {
+      setPayload(card);
+      setModeNow({ kind: 'deleted', fromList: false });
+      return;
+    }
+    setModeNow({ kind: 'task', fromList: false });
+    startPoll(card);
+  };
+
+  const strip: StripApi | undefined = canAnswer ? { open: (days) => void expand('task', days) } : undefined;
+
+  // A finished card's task can be deleted elsewhere (the full list, another chat, the desktop): one
+  // check when the card shows a finished task, and again whenever it comes back into view. Only
+  // task_not_found changes anything; the poller is never restarted for it.
+  const terminalTask = mode.kind === 'task' && payload && TERMINAL.has(payload.status) ? payload.task_id : null;
+  useEffect(() => {
+    const b = bridgeRef.current;
+    if (!terminalTask || !canAnswer || !b?.checkTask) return;
+    const id = terminalTask;
+    const check = async () => {
+      if (deleted.has(id)) return;
+      const r = await b.checkTask!(id);
+      if (r === 'deleted' && shownTask.current === id && modeRef.current.kind === 'task') markGone(id);
+    };
+    void check();
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void check();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [terminalTask, canAnswer]);
 
   const back = () => {
     gens.bumpView();
     stopPoll();
-    setMode({ kind: 'list' });
+    // A list the strip opened keeps its way back to the finished card.
+    setMode({ kind: 'list', back: !!origin.current });
   };
 
-  shownTask.current = mode.kind === 'task' && payload ? payload.task_id : null;
+  // The task whose answers and downloads are current: the card's own, or the full view's pane task.
+  shownTask.current = mode.kind === 'task' && payload ? payload.task_id
+    : mode.kind === 'full' && payload && payload.task_id === fullSel ? fullSel : null;
   if (mode.kind === 'add' && add) return <AddFiles key={add.task_id} add={add} api={upload} theme={theme} embedded={embedded} />;
-  if (mode.kind === 'list' && list) return <TaskList key={listEpoch} list={list} theme={theme} embedded={embedded} actions={actions} />;
+  if (mode.kind === 'list' && list) {
+    return <TaskList key={listEpoch} list={list} theme={theme} embedded={embedded} actions={actions} onBack={mode.back ? backToTask : undefined} />;
+  }
+  if (mode.kind === 'full' && list) {
+    const sel = fullSel && payload && payload.task_id === fullSel && !deleted.has(fullSel) ? payload : null;
+    const live = !!sel && !TERMINAL.has(sel.status);
+    const panePreview = preview.enabled
+      ? { ...preview, mode: 'fullscreen', open: async () => true, close: async () => {} }
+      : preview;
+    const b = bridgeRef.current;
+    return (
+      <FullView list={list} theme={theme} actions={actions} selected={fullSel}
+        onSelect={(id) => void selectInFull(id)} paneNote={paneNote} live={live}
+        onStop={b?.stopTask && fullSel ? async () => {
+          const ok = await b.stopTask!(fullSel);
+          if (ok) poller.current?.poke();
+          return ok;
+        } : undefined}
+        onExit={() => exitFull(true)}
+        pane={sel ? (
+          <Card key={sel.task_id} payload={sel} theme={theme} embedded download={download} browser={browser}
+            preview={panePreview} pane={{ prompt }} />
+        ) : null} />
+    );
+  }
+  if (mode.kind === 'deleted' && !mode.fromList && payload && deleted.has(payload.task_id)) {
+    return <DeletedCard title={payload.title} org={payload.org} theme={theme} embedded={embedded} stats={payload.stats} strip={strip} />;
+  }
   if (mode.kind === 'deleted') {
     return (
       <article class={cardClass(embedded)} data-theme={theme} aria-label="Frontier task">
@@ -406,7 +664,7 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
   if (payload && mode.kind === 'task') {
     return (
       <Card key={payload.task_id} payload={payload} theme={theme} embedded={embedded} answer={answer} download={download} browser={browser} upload={upload} preview={preview}
-        onBack={mode.fromList && list ? back : undefined} />
+        onBack={mode.fromList && list ? back : undefined} strip={mode.fromList ? undefined : strip} />
     );
   }
   if (connectFailed) {

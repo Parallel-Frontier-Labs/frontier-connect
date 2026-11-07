@@ -18,6 +18,8 @@ import { NoPlan } from './Sections';
 import { PausedSteps, PlanProgress, progressKey } from './Plan';
 import { QuestionAsk } from './Ask';
 import { NO_PREVIEW, PreviewPane, type PreviewGate } from './PreviewPane';
+import { PromptBlock, type PromptState } from './PromptBlock';
+import { Strip, type StripApi } from './Strip';
 import type { UploadApi } from './UploadPanel';
 
 /** How the card answers: through the host's app tool call, when the host offers one. */
@@ -102,6 +104,8 @@ export function Card({
   browser,
   upload,
   preview = NO_PREVIEW,
+  strip,
+  pane,
 }: {
   payload: TaskPayload;
   theme?: 'light' | 'dark';
@@ -118,6 +122,11 @@ export function Card({
   browser?: BrowserApi;
   /** Full-screen file preview beside the task (hosts that offer full screen; NO_PREVIEW elsewhere). */
   preview?: PreviewGate;
+  /** The finished card's "Your tasks" links (hosts that forward the card's tool calls). */
+  strip?: StripApi;
+  /** Shown as the full-screen list's task pane: no status pill (the row shows it), the prompt on
+   * top, and a file preview replaces the pane instead of opening beside it. */
+  pane?: { prompt: PromptState };
 }) {
   // The last answer sent from this card. It keeps the options locked ("Answered · continuing")
   // while the task picks it up, which the engine does asynchronously.
@@ -275,7 +284,8 @@ export function Card({
   const setPv = (v: { path: string; name: string } | null) => { pvRef.current = v; setPvState(v); };
   const previewRef = useRef(preview);
   previewRef.current = preview;
-  const narrow = useNarrow();
+  const narrowView = useNarrow();
+  const narrow = narrowView || !!pane;
   // Only the latest row click may open the preview.
   const openSeq = useRef(0);
   // Full-screen requests still unanswered, and whether one was granted that no preview took.
@@ -449,10 +459,14 @@ export function Card({
             {p.source ? <> · <SourceChip source={p.source} /></> : null}
           </div>
         </div>
-        <Pill status={p.status} />
+        {pane ? null : <Pill status={p.status} />}
       </header>
+      {pane && pane.prompt.kind === 'ok' && pane.prompt.text.trim() ? (
+        <div class="fc-body fc-body-prompt"><PromptBlock prompt={pane.prompt} turns={p.turn ?? 1} /></div>
+      ) : null}
       {body}
       {terminal ? <Footer payload={p} /> : null}
+      {terminal && !pane && strip && p.stats ? <Strip stats={p.stats} api={strip} /> : null}
       {/* One persistent live region: status changes and a sent answer are announced. */}
       <div class="fc-sr" aria-live="polite" aria-atomic="true">{announcement}</div>
     </article>

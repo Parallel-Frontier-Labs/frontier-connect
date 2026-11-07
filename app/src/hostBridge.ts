@@ -58,6 +58,25 @@ const modesOf = (ctx: Ctx): string[] | undefined =>
  * -> `{ name, version }`, host context `displayMode`, `availableDisplayModes`, `platform`,
  * `containerDimensions`.
  */
+/** The card's key to the task prompt, from the tool result's `_meta` (widget only, never shown to
+ * the model) and never from structuredContent: an https URL ending in /prompt and a token. */
+export function promptAccessOf(result: unknown): { url: string; token: string } | null {
+  const meta = (result as { _meta?: Record<string, unknown> } | undefined)?._meta;
+  const a = meta && typeof meta === 'object' ? (meta['frontier/prompt'] as { url?: unknown; token?: unknown } | undefined) : undefined;
+  const url = safeHttps(a?.url);
+  if (!url || !/\/prompt$/.test(new URL(url).pathname) || typeof a?.token !== 'string' || !a.token || a.token.length > 4000) return null;
+  return { url, token: a.token };
+}
+function withPromptAccess(p: TaskPayload | null, result: unknown): TaskPayload | null {
+  return p ? { ...p, prompt_access: promptAccessOf(result) } : p;
+}
+
+/** The error code a failed tool result carries (`structuredContent.error.code`), if any. */
+function errorCode(r: unknown): string | undefined {
+  const code = (r as { structuredContent?: { error?: { code?: unknown } } } | undefined)?.structuredContent?.error?.code;
+  return typeof code === 'string' ? code : undefined;
+}
+
 export function createHostBridge(
   app: App = new App({ name: 'frontier-task', version: '0.2.0' }, appCapabilities, { autoResize: true }),
 ): Bridge {
@@ -70,7 +89,7 @@ export function createHostBridge(
   const addListeners: ((a: AddFilesPayload) => void)[] = [];
   let latestAdd: AddFilesPayload | null = null;
   // Handlers must be set before connect() so the first tool result is not missed.
-  app.ontoolresult = (result: { structuredContent?: unknown }) => {
+  app.ontoolresult = (result: { structuredContent?: unknown; _meta?: unknown }) => {
     const add = parseAddFiles(result?.structuredContent);
     if (add) {
       latestAdd = add;
@@ -87,7 +106,7 @@ export function createHostBridge(
       for (const l of listListeners) l(list);
       return;
     }
-    const sc = parsePayload(result?.structuredContent);
+    const sc = withPromptAccess(parsePayload(result?.structuredContent), result);
     if (sc) {
       latest = sc;
       latestList = null;
@@ -157,7 +176,7 @@ export function createHostBridge(
         name: 'frontier_get_task',
         arguments: { task_id: taskId, after },
       });
-      return r?.isError ? null : parsePayload(r?.structuredContent);
+      return r?.isError ? null : withPromptAccess(parsePayload(r?.structuredContent), r);
     },
     theme: () => themeOf(app.getHostContext?.()),
     onThemeChange: (cb) => {
@@ -265,6 +284,7 @@ export function createHostBridge(
       if (q.status) args.status = q.status;
       if (q.source) args.source = q.source;
       if (q.cursor) args.cursor = q.cursor;
+      if (q.query) args.query = q.query;
       try {
         const r = await app.callServerTool({ name: 'frontier_list_tasks', arguments: args });
         if (!r || r.isError) return { kind: 'failed', message: errorLine(r, LIST_FAILED) };
@@ -303,6 +323,7 @@ export function createHostBridge(
       } catch {
         return { kind: 'failed', message: LINK_FAILED };
       }
+      if (r && r.isError && errorCode(r) === 'task_not_found') return { kind: 'failed', message: errorLine(r, LINK_FAILED), gone: true };
       if (!r || r.isError) return { kind: 'failed', message: errorLine(r, LINK_FAILED) };
       const sc = r.structuredContent as { url?: unknown; name?: unknown } | undefined;
       const url = safeHttps(sc?.url);
@@ -328,6 +349,15 @@ export function createHostBridge(
         return !r?.isError;
       } catch {
         return false;
+      }
+    },
+    async checkTask(taskId): Promise<'ok' | 'deleted' | 'unknown'> {
+      try {
+        const r = await app.callServerTool({ name: 'frontier_get_task', arguments: { task_id: taskId, after: 0 } });
+        if (r?.isError) return errorCode(r) === 'task_not_found' ? 'deleted' : 'unknown';
+        return r ? 'ok' : 'unknown';
+      } catch {
+        return 'unknown';
       }
     },
     async stopTask(taskId): Promise<boolean> {

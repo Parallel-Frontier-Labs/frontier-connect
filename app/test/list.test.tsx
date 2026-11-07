@@ -42,7 +42,8 @@ describe('parseList', () => {
     expect(l.items.map((i) => i.task_id)).toEqual(['t1', 't3']);
     expect(l.items[0]).toMatchObject({ status: 'done', source: 'other', work_ms: 0, turn: 1 });
     expect(l.items[1]).toMatchObject({ title: 'Untitled task', started_at: '', turn: 10000 });
-    expect(l.filters).toEqual({ days: 90, status: null, source: 'frontier' });
+    expect(l.filters).toEqual({ days: 90, status: null, source: 'frontier', query: null });
+    expect(l.searchable).toBe(false);
     expect([l.total, l.shown, l.next_cursor, l.capped]).toEqual([2, 2, null, false]);
   });
 
@@ -315,5 +316,44 @@ describe('TaskList row menu placement', () => {
     fireEvent.click(getByRole('button', { name: 'More actions for Task 1' }));
     expect(getByRole('menu').getAttribute('aria-label')).toBe('Task 1 actions');
     expect((container.querySelector('.fc-menu-room') as HTMLElement).style.height).toBe('38px');
+  });
+});
+
+
+describe('search, deleted rows and the full-screen entry (spec 2026-11-07)', () => {
+  it('parseList keeps a server-echoed query and the deleted flag, and nothing else', () => {
+    const l = parseList({
+      view: 'list', total: 2, shown: 2, next_cursor: null, capped: false,
+      filters: { days: 7, status: null, source: null, query: '  memo  ' },
+      items: [item(1, { deleted: true }), item(2, { deleted: 'yes' })],
+    })!;
+    expect(l.filters.query).toBe('memo');
+    expect(l.searchable).toBe(true);
+    expect(l.items.map((i) => i.deleted)).toEqual([true, false]);
+    const long = parseList({ view: 'list', items: [], filters: { days: 7, query: 'x'.repeat(300) } })!;
+    expect(long.filters.query!.length).toBe(100);
+    expect(parseList({ view: 'list', items: [], filters: { days: 7, query: null } })!.searchable).toBe(true);
+  });
+
+  it('a deleted row is faded and marked Deleted, cannot be opened and has no menu', () => {
+    const l = mkList({ items: [item(1, { deleted: true, title: 'Old memo' }), item(2)], total: 2, shown: 2 });
+    const a = acts();
+    const { container } = render(<TaskList list={l} actions={a} />);
+    const rows = container.querySelectorAll('.fc-row');
+    expect(rows[0]!.classList.contains('fc-row-deleted')).toBe(true);
+    expect(rows[0]!.querySelector('.fc-pill')!.textContent).toBe('Deleted');
+    expect(rows[0]!.querySelector('button')).toBeNull();
+    expect(rows[1]!.querySelector('button.fc-rt')).not.toBeNull();
+    expect(rows[1]!.querySelector('.fc-moreb')).not.toBeNull();
+  });
+
+  it('offers Expand only when the card can go full screen, and calls it', () => {
+    const l = mkList();
+    const { container, rerender } = render(<TaskList list={l} actions={acts()} />);
+    expect(container.querySelector('.fc-expand')).toBeNull();
+    const expand = vi.fn();
+    rerender(<TaskList list={l} actions={acts({ expand })} />);
+    fireEvent.click(container.querySelector('.fc-expand')!);
+    expect(expand).toHaveBeenCalledTimes(1);
   });
 });

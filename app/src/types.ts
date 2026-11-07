@@ -52,6 +52,9 @@ export interface TaskPayload {
   result: { summary: string; summary_type: string; takeaway: string | null } | null; work_ms: number;
   /** Credits used so far, computed by the backend; null or absent when unknown (an older server). */
   credits?: number | null;
+  /** The owner's tasks started in the last 7 and 30 days (finished payloads only), for the "Your
+   * tasks" strip; null or absent from older servers and on live tasks. */
+  stats?: { d7: number; d30: number } | null;
   usage: Usage | null; events: TaskEvent[]; cursor: number; more: boolean; view?: View | null;
   /** The organization the connection runs tasks in (header line). */
   org?: string | null;
@@ -67,6 +70,9 @@ export interface TaskPayload {
   /** The task's cloud browser, when it uses one; null when it has none (or the task ended), absent
    * when the payload does not say (older servers, some tool results). */
   browser?: BrowserInfo | null;
+  /** The card's key to GET /v1/runs/{id}/prompt, taken from the tool result's `_meta` by the host
+   * bridge (never from structuredContent, which the model can see). */
+  prompt_access?: { url: string; token: string } | null;
   /** Set on frontier_answer / frontier_steer / frontier_continue_task results only. */
   accepted?: boolean;
   reason?: string | null;
@@ -243,6 +249,15 @@ function cleanBrowser(v: unknown): BrowserInfo | null {
 }
 
 /** Validate and sanitise an untrusted payload; null when it is not a task payload at all. */
+const count = (v: unknown): number | null =>
+  typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 1_000_000 ? v : null;
+function cleanStats(v: unknown): { d7: number; d30: number } | null {
+  const o = obj(v);
+  const d7 = o ? count(o.d7) : null;
+  const d30 = o ? count(o.d30) : null;
+  return d7 !== null && d30 !== null ? { d7, d30 } : null;
+}
+
 export function parsePayload(v: unknown): TaskPayload | null {
   if (!isPayload(v)) return null;
   const r = v as unknown as Record<string, unknown>;
@@ -297,6 +312,7 @@ export function parsePayload(v: unknown): TaskPayload | null {
       .map((s) => ({ playbook: str(s.playbook, 80), skill: str(s.skill, 80) }))
       .filter((s) => s.playbook !== '' || s.skill !== ''),
     saved: cleanSaved(r.saved),
+    stats: cleanStats(r.stats),
   };
   if (typeof r.accepted === 'boolean') out.accepted = r.accepted;
   if (typeof r.reason === 'string') out.reason = r.reason.slice(0, 300);

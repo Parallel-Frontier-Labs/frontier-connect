@@ -25,3 +25,17 @@ describe('Generations', () => {
     await expect(g.run(() => Promise.reject(new Error('x')))).rejects.toThrow('x');
   });
 });
+
+
+describe('runInView', () => {
+  it('drops a result only when the view moved, never for a list query', async () => {
+    const { Generations } = await import('../src/generation');
+    const g = new Generations();
+    const t = g.tag();
+    g.bumpQuery();
+    expect((await g.runInView(Promise.resolve(1), t)).stale).toBe(false);
+    expect((await g.run(Promise.resolve(1), t)).stale).toBe(true);
+    g.bumpView();
+    expect((await g.runInView(Promise.resolve(1), t)).stale).toBe(true);
+  });
+});

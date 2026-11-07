@@ -12,7 +12,7 @@ export function SourceChip({ source }: { source: Source }) {
   return <span class={`fc-src fc-src-${source}`}>{SOURCE_LABEL[source]}</span>;
 }
 
-const DAYS_LABEL = (d: number) => (d === 1 ? 'Last 24 hours' : `Last ${d} days`);
+export const DAYS_LABEL = (d: number) => (d === 1 ? 'Last 24 hours' : `Last ${d} days`);
 
 /** "Oct 18 · 09:42" in the viewer's time zone. */
 export function formatStart(iso: string): string {
@@ -25,7 +25,31 @@ export function formatStart(iso: string): string {
 
 const STATUS_DOT: Partial<Record<ListStatus, true>> = { running: true, waiting: true };
 
-function StatusPill({ status }: { status: ListStatus }) {
+export function DeletedPill() {
+  return <span class="fc-pill fc-pill-sm fc-lpill-deleted">Deleted</span>;
+}
+
+/** A row whose task was deleted (its tasks row outlived the deletion): faded, marked, inert, as
+ * the dashboard's Observe table shows it. Never opened, never offered a menu. */
+export function DeletedRow({ item }: { item: ListItem }) {
+  return (
+    <li class="fc-row fc-row-deleted" data-task={item.task_id}>
+      <div class="fc-row-top">
+        <div class="fc-rmain">
+          <span class="fc-rt fc-rt-plain">{item.title}</span>
+          <div class="fc-rm fc-mono">
+            <span>{formatStart(item.started_at)}</span>
+            <span class="fc-dot" aria-hidden="true">·</span>
+            <SourceChip source={item.source} />
+          </div>
+        </div>
+        <DeletedPill />
+      </div>
+    </li>
+  );
+}
+
+export function StatusPill({ status }: { status: ListStatus }) {
   return (
     <span class={`fc-pill fc-pill-sm fc-lpill-${status}`}>
       {STATUS_DOT[status] ? <span class="fc-pd" aria-hidden="true" /> : null}
@@ -44,7 +68,15 @@ function Dots() {
   );
 }
 
-function TrashIcon() {
+export function ExpandIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M8.5 1.5h4v4M12.5 1.5 8 6M5.5 12.5h-4v-4M1.5 12.5 6 8" />
+    </svg>
+  );
+}
+
+export function TrashIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
       <path d="M2.5 4h9M5.5 4V2.5h3V4M3.5 4l.6 7.5h5.8l.6-7.5" />
@@ -85,6 +117,8 @@ export interface ListActions {
   query(q: ListQuery, append: boolean): Promise<string | null>;
   open(taskId: string): Promise<string | null>;
   remove(taskId: string): Promise<DeleteOutcome | Stale>;
+  /** Open the full-screen list view; absent where the host offers no full screen. */
+  expand?: () => void;
 }
 
 function Row({
@@ -179,12 +213,12 @@ function Row({
           <div id={`del-h-${item.task_id}`} class="fc-confirm-h">{`Delete "${item.title}"?`}</div>
           <div id={`del-d-${item.task_id}`} class="fc-confirm-d">This removes the task and its files. Its usage stays in Observe. This can't be undone.</div>
           <div class="fc-confirm-b">
-            <button type="button" class="fc-danger" disabled={busy} onClick={() => void confirmDelete()}>
-              {busy ? 'Deleting…' : 'Delete'}
-            </button>
             <button type="button" class="fc-secondary fc-secondary-sm" ref={cancelRef} disabled={busy}
               onClick={() => { setConfirm(null); setError(null); moreRef.current?.focus(); }}>
               Cancel
+            </button>
+            <button type="button" class="fc-danger" disabled={busy} onClick={() => void confirmDelete()}>
+              {busy ? 'Deleting…' : 'Delete'}
             </button>
           </div>
           {error ? <p class="fc-err" role="alert">{error}</p> : null}
@@ -236,7 +270,7 @@ function Row({
   );
 }
 
-function FilterSelect<T extends string | number>({
+export function FilterSelect<T extends string | number>({
   label, value, options, onChange, disabled,
 }: {
   label: string; value: T | null; options: { value: T | null; label: string }[]; onChange: (v: T | null) => void; disabled: boolean;
@@ -255,9 +289,11 @@ function FilterSelect<T extends string | number>({
 
 /** "Your Frontier tasks": filters, rows with an inline delete confirm, Show more. */
 export function TaskList({
-  list, theme = 'light', embedded = true, actions, announce,
+  list, theme = 'light', embedded = true, actions, announce, onBack,
 }: {
   list: ListPayload; theme?: 'light' | 'dark'; embedded?: boolean; actions: ListActions; announce?: string;
+  /** Opened from a finished card's strip on a host without full screen: back to that card. */
+  onBack?: () => void;
 }) {
   const [menu, setMenu] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
@@ -296,9 +332,9 @@ export function TaskList({
     if (err && append) setMoreFailed(true);
     else if (err) setError(err);
   };
-  const more = () => void run({ days: f.days, status: f.status, source: f.source, cursor: list.next_cursor }, true);
+  const more = () => void run({ days: f.days, status: f.status, source: f.source, ...(f.query ? { query: f.query } : {}), cursor: list.next_cursor }, true);
   const refilter = (change: Partial<ListQuery>) =>
-    void run({ days: f.days, status: f.status, source: f.source, ...change }, false);
+    void run({ days: f.days, status: f.status, source: f.source, ...(f.query ? { query: f.query } : {}), ...change }, false);
 
   const summary = [DAYS_LABEL(f.days), f.status ? LIST_STATUS_LABEL[f.status] : null, f.source ? SOURCE_LABEL[f.source] : null, list.org]
     .filter(Boolean)
@@ -310,19 +346,34 @@ export function TaskList({
   // Deleting every visible row must not strand the rest: load the next page by itself.
   useEffect(() => {
     if (actions.enabled && !list.items.length && list.next_cursor && !loading && !list.capped) {
-      void run({ days: f.days, status: f.status, source: f.source, cursor: list.next_cursor }, true);
+      void run({ days: f.days, status: f.status, source: f.source, ...(f.query ? { query: f.query } : {}), cursor: list.next_cursor }, true);
     }
   }, [list.items.length, list.next_cursor]);
   const live = said || announce || `${list.items.length} of ${list.total} tasks shown.`;
 
   return (
     <article class={cardClass(embedded)} data-theme={theme} aria-label="Your Frontier tasks">
+      {onBack ? (
+        <div class="fc-backbar">
+          <button type="button" class="fc-back" onClick={onBack}>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M11 7H3M6.5 3.5L3 7l3.5 3.5" />
+            </svg>
+            Back to the task
+          </button>
+        </div>
+      ) : null}
       <header class="fc-head fc-head-list">
         <Mark />
         <div class="fc-heading" ref={headRef} tabIndex={-1}>
           <div class="fc-title">Your Frontier tasks</div>
           <div class="fc-org">{summary}</div>
         </div>
+        {actions.enabled && actions.expand ? (
+          <button type="button" class="fc-expand" onClick={actions.expand} aria-label="Open your tasks full screen" title="Full screen">
+            <ExpandIcon />
+          </button>
+        ) : null}
       </header>
       {actions.enabled ? (
         <div class="fc-fchips" role="group" aria-label="Filters">
@@ -339,7 +390,7 @@ export function TaskList({
       ) : null}
       {list.items.length ? (
         <ul class={loading === 'filter' ? 'fc-rows fc-rows-busy' : 'fc-rows'} aria-label="Tasks, newest first" aria-busy={loading === 'filter' || undefined}>
-          {list.items.map((it) => (
+          {list.items.map((it) => it.deleted ? <DeletedRow key={it.task_id} item={it} /> : (
             <Row key={it.task_id} item={it} actions={actions} menuOpen={menu === it.task_id} setMenu={setMenu}
               confirming={confirm === it.task_id} setConfirm={setConfirm} setRoom={setRoom}
               onDeleted={(item) => {

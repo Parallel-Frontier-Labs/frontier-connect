@@ -23,6 +23,12 @@ export class Generations {
   current(t: Tag): boolean {
     return t.view === this.view && t.query === this.query;
   }
+  /** Like run, but stale only when the VIEW moved: a poll of the task on screen must survive list
+   * queries (a search in the full-screen list re-queries while the pane's task keeps updating). */
+  async runInView<T>(call: Promise<T> | (() => Promise<T>), t: Tag = this.tag()): Promise<Guarded<T>> {
+    const value = await (typeof call === 'function' ? call() : call);
+    return { stale: t.view !== this.view, value };
+  }
   /** Settle `call` (a promise, or a function returning one) under the current tag. Rejections pass through. */
   async run<T>(call: Promise<T> | (() => Promise<T>), t: Tag = this.tag()): Promise<Guarded<T>> {
     const value = await (typeof call === 'function' ? call() : call);

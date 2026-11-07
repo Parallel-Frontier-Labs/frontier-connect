@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { App } from '@modelcontextprotocol/ext-apps';
-import { createHostBridge, DELETE_FAILED, LIST_FAILED, SEND_FAILED } from '../src/hostBridge';
+import { createHostBridge, DELETE_FAILED, LIST_FAILED, promptAccessOf, SEND_FAILED } from '../src/hostBridge';
 import type { TaskPayload } from '../src/types';
 
 const payload = { task_id: 't', status: 'running', cursor: 4 } as unknown as TaskPayload;
@@ -257,5 +257,62 @@ describe('createHostBridge', () => {
     expect(await on.downloadFile!('a.csv', 'text/csv', 'YSxi')).toBe(false);
     downloadFile.mockRejectedValueOnce(new Error('gone'));
     expect(await on.downloadFile!('a.csv', 'text/csv', 'YSxi')).toBe(false);
+  });
+});
+
+describe('task list full view calls (spec 2026-11-07)', () => {
+  const notFound = { isError: true, structuredContent: { error: { code: 'task_not_found', message: 'Gone' } }, content: [{ type: 'text', text: 'Gone' }] };
+
+  it('listTasks sends a title query only when there is one', async () => {
+    const app = fake();
+    app.callServerTool.mockResolvedValue({ structuredContent: { view: 'list', items: [], filters: { days: 7, query: 'memo' } } });
+    const b = createHostBridge(app);
+    await b.listTasks({ days: 7, query: 'memo' });
+    await b.listTasks({ days: 7, query: null });
+    expect(app.callServerTool.mock.calls.map((c) => c[0].arguments)).toEqual([{ days: 7, query: 'memo' }, { days: 7 }]);
+  });
+
+  it('checkTask says deleted only for task_not_found', async () => {
+    const app = fake();
+    const b = createHostBridge(app);
+    app.callServerTool.mockResolvedValueOnce({ structuredContent: payload });
+    expect(await b.checkTask!('t')).toBe('ok');
+    app.callServerTool.mockResolvedValueOnce(notFound);
+    expect(await b.checkTask!('t')).toBe('deleted');
+    app.callServerTool.mockResolvedValueOnce({ isError: true, structuredContent: { error: { code: 'engine_unavailable' } } });
+    expect(await b.checkTask!('t')).toBe('unknown');
+    app.callServerTool.mockRejectedValueOnce(new Error('x'));
+    expect(await b.checkTask!('t')).toBe('unknown');
+  });
+
+  it('a file link for a task that no longer exists is marked gone', async () => {
+    const app = fake();
+    app.callServerTool.mockResolvedValueOnce(notFound);
+    const r = await createHostBridge(app).fileLink('t', null);
+    expect(r).toMatchObject({ kind: 'failed', gone: true });
+  });
+});
+
+
+describe('the prompt key (spec 2026-11-07 review)', () => {
+  const access = { url: 'https://api.example.com/v1/runs/t/prompt', token: 'pk' };
+
+  it('comes from _meta only, on host results and on getTask', async () => {
+    const app = fake();
+    const b = createHostBridge(app);
+    const got: TaskPayload[] = [];
+    b.onPayload((p) => got.push(p));
+    app.ontoolresult({ structuredContent: { ...payload, prompt_access: { url: 'https://evil.example/prompt', token: 'x' } } });
+    app.ontoolresult({ structuredContent: payload, _meta: { 'frontier/prompt': access } });
+    expect(got.map((p) => p.prompt_access)).toEqual([null, access]);
+    app.callServerTool.mockResolvedValue({ structuredContent: payload, _meta: { 'frontier/prompt': access } });
+    expect((await b.getTask('t', 0))!.prompt_access).toEqual(access);
+  });
+
+  it('refuses anything but an https /prompt URL with a token', () => {
+    expect(promptAccessOf({ _meta: { 'frontier/prompt': { url: 'http://api.example.com/v1/runs/t/prompt', token: 'pk' } } })).toBeNull();
+    expect(promptAccessOf({ _meta: { 'frontier/prompt': { url: 'https://api.example.com/v1/runs/t/view', token: 'pk' } } })).toBeNull();
+    expect(promptAccessOf({ _meta: { 'frontier/prompt': { url: access.url, token: 3 } } })).toBeNull();
+    expect(promptAccessOf({})).toBeNull();
   });
 });

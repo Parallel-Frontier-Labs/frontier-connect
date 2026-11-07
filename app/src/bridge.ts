@@ -15,10 +15,12 @@ export type AnswerOutcome =
 /** A result dropped because the card moved on (another view, task or query) before it arrived. */
 export type Stale = { kind: 'stale' };
 
-export interface ListQuery { days: number; status?: ListStatus | null; source?: Source | null; cursor?: string | null }
+export interface ListQuery { days: number; status?: ListStatus | null; source?: Source | null; cursor?: string | null; query?: string | null }
 export type ListOutcome = { kind: 'ok'; list: ListPayload } | { kind: 'failed'; message: string };
 /** A browser link for one delivered file or the zipped folder (frontier_file_link). */
-export type LinkOutcome = { kind: 'ok'; url: string; name: string } | { kind: 'failed'; message: string };
+export type LinkOutcome = { kind: 'ok'; url: string; name: string } | { kind: 'failed'; message: string; gone?: true };
+/** GET /v1/runs/{id}/prompt over the view token: the user's own words; `gone` when the task no longer exists. */
+export type PromptOutcome = { kind: 'ok'; prompt: string; truncated: boolean } | { kind: 'gone' } | { kind: 'failed' };
 /** What came of a download click: the host opened the link, or the card shows it as a plain link. */
 export type DownloadOutcome = { kind: 'opened' } | { kind: 'link'; url: string; name: string } | { kind: 'failed'; message: string };
 export type DeleteOutcome = { kind: 'deleted' } | { kind: 'refused'; reason: string } | { kind: 'failed'; message: string };
@@ -91,4 +93,7 @@ export interface Bridge {
   uploadTicket?(taskId: string, instruction?: string): Promise<TicketResult>;
   /** Post `text` into the chat as the user (MCP Apps `ui/message`). False when the host cannot. */
   sendMessage?(text: string): Promise<boolean>;
+  /** One frontier_get_task to learn whether a finished card's task still exists: 'deleted' only for
+   * task_not_found, 'unknown' for any other failure (the card then changes nothing). */
+  checkTask?(taskId: string): Promise<'ok' | 'deleted' | 'unknown'>;
 }
