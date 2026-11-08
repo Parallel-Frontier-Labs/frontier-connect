@@ -208,7 +208,7 @@ describe('built card in a scripted host', () => {
     await wait(50);
     h.send(list('First task'));
     await until(() => h.text().includes('First task'));
-    expect(h.text()).toContain('Your Frontier tasks');
+    expect(h.text()).toContain('Parallel Frontier Tasks');
     await until(() => !!h.w.document.querySelector('select'));
     const sel = h.w.document.querySelectorAll('select')[1] as any;
     sel.value = '3';

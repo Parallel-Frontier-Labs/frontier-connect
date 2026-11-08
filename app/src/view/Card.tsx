@@ -116,7 +116,7 @@ export function Card({
   download?: DownloadApi;
   /** Card uploads: the ask for a file and the finished-task Files section. */
   upload?: UploadApi;
-  /** Opened from "Your Frontier tasks": a "← All tasks" bar returns to the list. */
+  /** Opened from "Parallel Frontier Tasks": a "← All tasks" bar returns to the list. */
   onBack?: () => void;
   /** The task's cloud browser (frames, display modes): a live preview while the agent drives it. */
   browser?: BrowserApi;
@@ -478,15 +478,18 @@ export function Card({
 const NARROW = '(max-width: 899px)';
 
 /** True below 900 px wide: the preview then takes the whole view, with a way back to the task. */
-function useNarrow(): boolean {
+export function useNarrow(): boolean {
   const mq = () => (typeof window !== 'undefined' ? window.matchMedia?.(NARROW) : undefined);
   const [narrow, setNarrow] = useState(() => !!mq()?.matches);
   useEffect(() => {
     const m = mq();
-    if (!m?.addEventListener) return;
+    if (!m) return;
     const on = () => setNarrow(m.matches);
-    m.addEventListener('change', on);
-    return () => m.removeEventListener('change', on);
+    m.addEventListener?.('change', on);
+    // Read again once listening: a host that resized the frame between the first render and
+    // now sent its change event to nobody, and the layout would stay stale until the next one.
+    on();
+    return () => m.removeEventListener?.('change', on);
   }, []);
   return narrow;
 }

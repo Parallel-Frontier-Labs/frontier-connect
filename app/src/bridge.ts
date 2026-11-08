@@ -56,7 +56,7 @@ export interface Bridge {
   onReady(cb: () => void): void;
   /** frontier_answer through the host. Never retried: a timeout or error is reported as failed. */
   answer(taskId: string, askId: string, answers: Answers): Promise<AnswerOutcome>;
-  /** frontier_list_tasks tool results the host shows this card for ("Your Frontier tasks"). */
+  /** frontier_list_tasks tool results the host shows this card for ("Parallel Frontier Tasks"). */
   onList(cb: (l: ListPayload) => void): void;
   /** frontier_list_tasks from the card: a filter change or "Show more". */
   listTasks(q: ListQuery): Promise<ListOutcome>;

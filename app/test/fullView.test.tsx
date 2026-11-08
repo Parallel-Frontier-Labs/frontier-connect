@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/preact
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Bridge, ListQuery } from '../src/bridge';
 import { parseList, type ListPayload } from '../src/list';
-import { RESIZE_WAIT_MS, Root, SEARCH_UNAVAILABLE } from '../src/Root';
+import { Root, SEARCH_UNAVAILABLE } from '../src/Root';
 import type { TaskPayload } from '../src/types';
 import { SEARCH_DEBOUNCE_MS, STOP_FIRST_NOTE } from '../src/view/FullView';
 
@@ -91,8 +91,8 @@ async function openFull(r: ReturnType<typeof rig>, items = [row('a'), row('b'), 
   fireEvent.click(document.querySelector('.fc-expand')!);
   await settle();
 }
-/** Past the card's wait for the frame to take its full-screen size. */
-const settle = () => act(async () => { await new Promise((r) => setTimeout(r, RESIZE_WAIT_MS + 20)); for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0)); });
+/** Past the host's full-screen grant and the first task's load. */
+const settle = flush;
 
 describe('the full-screen task list', () => {
   it('Expand asks for full screen and shows the list beside the first task, with its prompt', async () => {
@@ -351,15 +351,31 @@ describe('review fixes (2026-11-07)', () => {
     expect('taskPrompt' in r.bridge).toBe(false);
   });
 
-  it('measures the width after the host grants full screen; a still-narrow view goes back inline', async () => {
-    const wide = rig();
-    await openFull(wide); // narrow inline, wide once granted
-    expect(document.querySelector('.fc-full')).not.toBeNull();
-    cleanup();
-    const phone = rig({ wideAfterGrant: false });
-    await openFull(phone);
-    expect(document.querySelector('.fc-full')).toBeNull();
-    expect(phone.bridge.requestDisplayMode).toHaveBeenLastCalledWith('inline');
+  it('a narrow full screen (Codex side panel) stays open and stacks: list first, then the task with a way back', async () => {
+    const r = rig({ wideAfterGrant: false });
+    await openFull(r);
+    // Codex grants "fullscreen" as a side panel under 900 px: never hand it back inline.
+    expect(r.bridge.requestDisplayMode).toHaveBeenCalledTimes(1);
+    expect(r.bridge.requestDisplayMode).toHaveBeenLastCalledWith('fullscreen');
+    expect(document.querySelector('.fc-full.fc-full-stack')).not.toBeNull();
+    // Opened from the list: the list shows, the pane waits.
+    expect(document.querySelectorAll('.fc-frow').length).toBe(3);
+    expect(document.querySelector('.fc-full-pane')).toBeNull();
+    fireEvent.click(document.querySelector('.fc-frow[data-task="b"] .fc-frow-open')!);
+    await flush();
+    expect(document.querySelector('.fc-full-list')).toBeNull();
+    screen.getByText('Result of b');
+    fireEvent.click(screen.getByRole('button', { name: 'All tasks' }));
+    expect(document.querySelector('.fc-full-pane')).toBeNull();
+    expect(document.querySelector('.fc-frow-on')!.getAttribute('data-task')).toBe('b');
+  });
+
+  it('a wide full screen keeps both panes side by side', async () => {
+    const r = rig();
+    await openFull(r);
+    expect(document.querySelector('.fc-full-stack')).toBeNull();
+    expect(document.querySelector('.fc-full-list')).not.toBeNull();
+    expect(document.querySelector('.fc-full-pane')).not.toBeNull();
   });
 
   it('a file in the full view pane opens its download link', async () => {

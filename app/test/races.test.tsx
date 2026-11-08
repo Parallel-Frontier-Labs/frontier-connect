@@ -80,7 +80,7 @@ describe('superseded navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Task 1' }));
     act(() => r.list(listOf([5], { total: 1, next_cursor: null })));
     await act(async () => { r.gets.t1!.resolve(task('t1')); await tick(); });
-    screen.getByText('Your Frontier tasks');
+    screen.getByText('Parallel Frontier Tasks');
     screen.getByText('Task 5');
     expect(screen.queryByText('Detail of t1')).toBeNull();
   });

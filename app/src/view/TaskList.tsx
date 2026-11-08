@@ -8,8 +8,33 @@ import {
 import { Chevron, Mark } from './icons';
 
 /** The tinted source name chip (Frontier blue, Claude orange, ChatGPT/Codex/Copilot grey, Scheduled violet). */
-export function SourceChip({ source }: { source: Source }) {
-  return <span class={`fc-src fc-src-${source}`}>{SOURCE_LABEL[source]}</span>;
+export function SourceChip({ source }: { source: Source | null }) {
+  return source ? <span class={`fc-src fc-src-${source}`}>{SOURCE_LABEL[source]}</span> : null;
+}
+
+/** The app chip after a dot, or nothing when no app is known (a deleted task whose row is gone). */
+export function SourcePart({ source }: { source: Source | null }) {
+  if (!source) return null;
+  return (
+    <>
+      <span class="fc-dot" aria-hidden="true">·</span>
+      <SourceChip source={source} />
+    </>
+  );
+}
+
+/** The dashboard's Playbook column: the playbook (or "Ad hoc") and, under it, the skill, or "No
+ * skill yet" for live ad hoc work. A deleted row keeps its playbook cell with no skill line. */
+export function PlaybookCell({ item }: { item: ListItem }) {
+  const skill = item.playbook ? item.skill?.title ?? null : item.deleted ? null : 'No skill yet';
+  return (
+    <div class="fc-pbline">
+      <span class={item.playbook ? 'fc-pb' : 'fc-pb fc-pb-adhoc'} title={item.playbook ? 'Playbook' : undefined}>
+        {item.playbook ? item.playbook.name : 'Ad hoc'}
+      </span>
+      {skill ? <span class={item.playbook ? 'fc-pb-skill' : 'fc-pb-skill fc-pb-none'}>{skill}</span> : null}
+    </div>
+  );
 }
 
 export const DAYS_LABEL = (d: number) => (d === 1 ? 'Last 24 hours' : `Last ${d} days`);
@@ -39,9 +64,9 @@ export function DeletedRow({ item }: { item: ListItem }) {
           <span class="fc-rt fc-rt-plain">{item.title}</span>
           <div class="fc-rm fc-mono">
             <span>{formatStart(item.started_at)}</span>
-            <span class="fc-dot" aria-hidden="true">·</span>
-            <SourceChip source={item.source} />
+            <SourcePart source={item.source} />
           </div>
+          <PlaybookCell item={item} />
         </div>
         <DeletedPill />
       </div>
@@ -187,8 +212,7 @@ function Row({
   const meta = (
     <div class="fc-rm fc-mono">
       <span>{formatStart(item.started_at)}</span>
-      <span class="fc-dot" aria-hidden="true">·</span>
-      <SourceChip source={item.source} />
+      <SourcePart source={item.source} />
       <span class="fc-dot" aria-hidden="true">·</span>
       <span>{live ? `${formatWork(item.work_ms)} so far` : formatWork(item.work_ms)}</span>
       {item.turn > 1 ? (
@@ -206,6 +230,7 @@ function Row({
           <div class="fc-rmain">
             <span class="fc-rt fc-rt-plain">{item.title}</span>
             {meta}
+            <PlaybookCell item={item} />
           </div>
           <StatusPill status={item.status} />
         </div>
@@ -236,6 +261,7 @@ function Row({
             <span class="fc-rt fc-rt-plain">{item.title}</span>
           )}
           {meta}
+          <PlaybookCell item={item} />
         </div>
         <StatusPill status={item.status} />
         {actions.enabled ? (
@@ -287,7 +313,7 @@ export function FilterSelect<T extends string | number>({
   );
 }
 
-/** "Your Frontier tasks": filters, rows with an inline delete confirm, Show more. */
+/** "Parallel Frontier Tasks": filters, rows with an inline delete confirm, Show more. */
 export function TaskList({
   list, theme = 'light', embedded = true, actions, announce, onBack,
 }: {
@@ -352,7 +378,7 @@ export function TaskList({
   const live = said || announce || `${list.items.length} of ${list.total} tasks shown.`;
 
   return (
-    <article class={cardClass(embedded)} data-theme={theme} aria-label="Your Frontier tasks">
+    <article class={cardClass(embedded)} data-theme={theme} aria-label="Parallel Frontier Tasks">
       {onBack ? (
         <div class="fc-backbar">
           <button type="button" class="fc-back" onClick={onBack}>
@@ -366,7 +392,7 @@ export function TaskList({
       <header class="fc-head fc-head-list">
         <Mark />
         <div class="fc-heading" ref={headRef} tabIndex={-1}>
-          <div class="fc-title">Your Frontier tasks</div>
+          <div class="fc-title">Parallel Frontier Tasks</div>
           <div class="fc-org">{summary}</div>
         </div>
         {actions.enabled && actions.expand ? (

@@ -1,6 +1,6 @@
 import type { Status } from './types';
 
-/** "Your Frontier tasks": the frontier_list_tasks payload (view "list"), sanitised like a task payload. */
+/** "Parallel Frontier Tasks": the frontier_list_tasks payload (view "list"), sanitised like a task payload. */
 export const LIST_STATUSES = ['running', 'waiting', 'done', 'stopped', 'error'] as const;
 export type ListStatus = (typeof LIST_STATUSES)[number];
 export const SOURCES = ['frontier', 'claude', 'chatgpt', 'codex', 'copilot', 'scheduled', 'other'] as const;
@@ -8,9 +8,14 @@ export type Source = (typeof SOURCES)[number];
 export const DAYS = [1, 7, 30, 90] as const;
 
 export interface ListItem {
-  task_id: string; title: string; status: ListStatus; started_at: string; source: Source; work_ms: number; turn: number;
+  /** `source` null: no app is known (the server's app_known false: a deleted task whose row is gone). */
+  task_id: string; title: string; status: ListStatus; started_at: string; source: Source | null; work_ms: number; turn: number;
   /** A deletion tombstone exists for the row: shown faded and marked Deleted, never opened. */
   deleted: boolean;
+  /** The dashboard's Playbook column: null is ad hoc. */
+  playbook: { id: string; name: string } | null;
+  /** The skill that attributed the row to its playbook, when there is one. */
+  skill: { name: string; title: string } | null;
 }
 /** `query`: the title search the server applied (null: none). */
 export interface ListFilters { days: number; status: ListStatus | null; source: Source | null; query: string | null }
@@ -31,6 +36,14 @@ const obj = (v: unknown): Record<string, unknown> | null =>
   v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 const int = (v: unknown, d = 0): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : d);
 const oneOf = <T extends string>(all: readonly T[], v: unknown): T | null => all.find((x) => x === v) ?? null;
+const text = (v: unknown, max: number): string | null => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
+/** `{a, b}` with both non-empty strings (capped), else null. */
+function pair<A extends string, B extends string>(v: unknown, a: A, b: B): Record<A | B, string> | null {
+  const o = obj(v);
+  const x = text(o?.[a], 120);
+  const y = text(o?.[b], 120);
+  return x && y ? ({ [a]: x, [b]: y } as Record<A | B, string>) : null;
+}
 
 /** Validate and sanitise an untrusted list payload; null when it is not one. */
 export function parseList(v: unknown): ListPayload | null {
@@ -48,10 +61,14 @@ export function parseList(v: unknown): ListPayload | null {
       title: (typeof i.title === 'string' && i.title.trim() ? i.title : 'Untitled task').slice(0, 200),
       status: oneOf(LIST_STATUSES, i.status) ?? 'done',
       started_at: started,
-      source: oneOf(SOURCES, i.source) ?? 'other',
+      // app_known false: a deleted task whose row is gone (the server keeps `source` a string
+      // for hosts holding the old output schema); the card then shows no app.
+      source: i.app_known === false ? null : oneOf(SOURCES, i.source) ?? 'other',
       work_ms: int(i.work_ms),
       turn: Math.max(1, Math.min(int(i.turn, 1), 10_000)),
       deleted: i.deleted === true,
+      playbook: pair(i.playbook, 'id', 'name'),
+      skill: pair(i.skill, 'name', 'title'),
     });
   }
   return {

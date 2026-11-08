@@ -71,7 +71,7 @@ describe('TaskList', () => {
       next_cursor: 'c',
     });
     const { getByText, container } = render(<TaskList list={l} actions={acts()} />);
-    getByText('Your Frontier tasks');
+    getByText('Parallel Frontier Tasks');
     getByText('Last 7 days · Halcyon North');
     const pills = Array.from(container.querySelectorAll('.fc-pill')).map((p) => p.textContent);
     expect(pills).toEqual(['Working', 'Needs your answer', 'Done', 'Failed', 'Stopped', 'Done']);
@@ -355,5 +355,45 @@ describe('search, deleted rows and the full-screen entry (spec 2026-11-07)', () 
     rerender(<TaskList list={l} actions={acts({ expand })} />);
     fireEvent.click(container.querySelector('.fc-expand')!);
     expect(expand).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the Playbook column, as the dashboard shows it (owner, 2026-11-07)', () => {
+  const pb = { playbook: { id: 'advisor-essentials', name: 'Advisor Essentials' }, skill: { name: 'second-opinion', title: 'Second opinion' } };
+
+  it('parseList keeps a playbook and skill, drops malformed ones, and keeps a missing app as none', () => {
+    const l = mkList({
+      items: [item(1, pb), item(2, { playbook: { id: 7 }, skill: 'x' }), item(3, { source: 'other', app_known: false, deleted: true }),
+        item(4, { source: null })],
+      total: 4, shown: 4,
+    });
+    expect(l.items[0]!.playbook).toEqual({ id: 'advisor-essentials', name: 'Advisor Essentials' });
+    expect(l.items[0]!.skill).toEqual({ name: 'second-opinion', title: 'Second opinion' });
+    expect(l.items[1]!.playbook).toBeNull();
+    expect(l.items[1]!.skill).toBeNull();
+    // The server keeps `source` a string for cached schemas and says app_known: false instead.
+    expect(l.items[2]!.source).toBeNull();
+    expect(l.items[0]!.source).toBe('claude');
+    expect(l.items[3]!.source).toBe('other'); // a bare null (never sent now) is an unknown app
+  });
+
+  it('a row shows its playbook and skill, or Ad hoc with No skill yet', () => {
+    const l = mkList({ items: [item(1, pb), item(2)], total: 2, shown: 2 });
+    const { container } = render(<TaskList list={l} actions={acts()} />);
+    const rows = container.querySelectorAll('.fc-row');
+    expect(rows[0]!.querySelector('.fc-pb')!.textContent).toBe('Advisor Essentials');
+    expect(rows[0]!.querySelector('.fc-pb-skill')!.textContent).toBe('Second opinion');
+    expect(rows[1]!.querySelector('.fc-pb')!.textContent).toBe('Ad hoc');
+    expect(rows[1]!.querySelector('.fc-pb-skill')!.textContent).toBe('No skill yet');
+  });
+
+  it('a deleted row is faded with its full title and Ad hoc, no skill line and no app when none is known', () => {
+    const l = mkList({ items: [item(1, { deleted: true, title: 'US Market Check', source: 'other', app_known: false })], total: 1, shown: 1 });
+    const { container } = render(<TaskList list={l} actions={acts()} />);
+    const row = container.querySelector('.fc-row-deleted')!;
+    expect(row.querySelector('.fc-rt')!.textContent).toBe('US Market Check');
+    expect(row.querySelector('.fc-pb')!.textContent).toBe('Ad hoc');
+    expect(row.querySelector('.fc-pb-skill')).toBeNull();
+    expect(row.querySelector('.fc-src')).toBeNull();
   });
 });

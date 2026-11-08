@@ -195,7 +195,7 @@ describe('Root: your Frontier tasks', () => {
     render(<Root makeBridge={() => r.bridge} />);
     act(() => r.list(parseList(listOf([1, 2]))));
     act(() => r.ready());
-    screen.getByText('Your Frontier tasks');
+    screen.getByText('Parallel Frontier Tasks');
     fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
     await flush();
     expect(r.bridge.listTasks).toHaveBeenCalledWith({ days: 7, status: null, source: null, cursor: 'c1' });
@@ -206,7 +206,7 @@ describe('Root: your Frontier tasks', () => {
     expect(r.bridge.getTask).toHaveBeenCalledWith('t3', 0);
     screen.getByText('Detail of t3');
     fireEvent.click(screen.getByRole('button', { name: 'All tasks' }));
-    screen.getByText('Your Frontier tasks');
+    screen.getByText('Parallel Frontier Tasks');
     screen.getByText('Task 4');
     screen.getByText('4 of 12');
     expect(document.activeElement?.textContent).toBe('Task 3');

@@ -38,34 +38,6 @@ function within<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   });
 }
 
-/** Below 900 px wide the two-pane view does not fit: the list stays in the card. */
-const narrowNow = () => {
-  try {
-    return !!window.matchMedia?.('(max-width: 899px)').matches;
-  } catch {
-    return false;
-  }
-};
-
-/** Wait for the frame to take its new size after a display-mode change: the next resize, or two
- * frames, whichever comes first, and never longer than RESIZE_WAIT_MS. */
-export const RESIZE_WAIT_MS = 400;
-function settledWidth(): Promise<void> {
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      window.removeEventListener('resize', finish);
-      resolve();
-    };
-    window.addEventListener('resize', finish);
-    setTimeout(finish, RESIZE_WAIT_MS);
-    const raf = typeof window.requestAnimationFrame === 'function' ? window.requestAnimationFrame.bind(window) : (f: () => void) => setTimeout(f, 16);
-    raf(() => raf(() => { if (window.innerWidth >= 900) finish(); }));
-  });
-}
-
 /** `p`, or false once `ms` pass or it rejects. */
 function withTimeout(p: Promise<boolean>, ms: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -504,16 +476,13 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
     setPrompt(pr.value.kind === 'ok' ? { kind: 'ok', text: pr.value.prompt, truncated: pr.value.truncated } : { kind: 'none' });
   };
 
-  /** Ask the host for full screen: true only when it applied it (and the view is wide enough). */
+  /** Ask the host for full screen: true only when it applied it. Whatever width it grants is
+   * kept: Codex's full screen is a side panel under 900 px, and handing it back inline closed
+   * the panel the user had just opened. FullView stacks its panes when narrow. */
   const enterFull = async (): Promise<boolean> => {
     const b = bridgeRef.current;
     if (!b?.requestDisplayMode) return false;
-    // The inline card is narrow by nature: measure only after the host has expanded the frame.
-    if ((await within(b.requestDisplayMode('fullscreen'), DISPLAY_MODE_WAIT_MS, 'inline')) !== 'fullscreen') return false;
-    await settledWidth();
-    if (!narrowNow()) return true;
-    void b.requestDisplayMode('inline'); // full screen on a phone-sized view: the in-card list fits better
-    return false;
+    return (await within(b.requestDisplayMode('fullscreen'), DISPLAY_MODE_WAIT_MS, 'inline')) === 'fullscreen';
   };
 
   /** Open the full-screen list from the inline list, or from a finished card's strip over `days`.
@@ -632,7 +601,7 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
       : preview;
     const b = bridgeRef.current;
     return (
-      <FullView list={list} theme={theme} actions={actions} selected={fullSel}
+      <FullView list={list} theme={theme} actions={actions} selected={fullSel} from={mode.from}
         onSelect={(id) => void selectInFull(id)} paneNote={paneNote} live={live}
         onStop={b?.stopTask && fullSel ? async () => {
           const ok = await b.stopTask!(fullSel);

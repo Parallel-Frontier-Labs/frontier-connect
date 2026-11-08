@@ -1,14 +1,15 @@
 import type { JSX } from 'preact';
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { DeleteOutcome, Stale } from '../bridge';
 import { formatWork } from '../format';
 import {
   DAYS, LIST_STATUS_LABEL, LIST_STATUSES, QUERY_MAX, SOURCE_LABEL, SOURCES,
   type ListItem, type ListPayload, type ListStatus, type Source,
 } from '../list';
+import { useNarrow } from './Card';
 import { Chevron, Mark } from './icons';
 import {
-  DAYS_LABEL, DeletedPill, FilterSelect, formatStart, SourceChip, StatusPill, TrashIcon, type ListActions,
+  DAYS_LABEL, DeletedPill, FilterSelect, formatStart, PlaybookCell, SourcePart, StatusPill, TrashIcon, type ListActions,
 } from './TaskList';
 
 /** How long typing pauses before the title search is sent. */
@@ -32,6 +33,9 @@ export interface FullViewProps {
   /** Stop the selected task; true when the server accepted it. */
   onStop?: () => Promise<boolean>;
   onExit(): void;
+  /** Where the view was opened: from the list (the list shows first when narrow), or from a
+   * finished card's strip (its task shows first). */
+  from?: 'list' | 'task';
 }
 
 const DELETE_COPY = "This removes the task and its files. Its usage stays in Observe. This can't be undone.";
@@ -67,9 +71,9 @@ function SideRow({ item, selected, onSelect, onBin, note }: {
           <span class="fc-rt fc-rt-plain">{item.title}</span>
           <span class="fc-rm fc-mono">
             <span>{formatStart(item.started_at)}</span>
-            <span class="fc-dot" aria-hidden="true">·</span>
-            <SourceChip source={item.source} />
+            <SourcePart source={item.source} />
           </span>
+          <PlaybookCell item={item} />
         </div>
         <DeletedPill />
       </li>
@@ -83,11 +87,11 @@ function SideRow({ item, selected, onSelect, onBin, note }: {
           <span class="fc-rt">{item.title}</span>
           <span class="fc-rm fc-mono">
             <span>{formatStart(item.started_at)}</span>
-            <span class="fc-dot" aria-hidden="true">·</span>
-            <SourceChip source={item.source} />
+            <SourcePart source={item.source} />
             <span class="fc-dot" aria-hidden="true">·</span>
             <span>{live ? `${formatWork(item.work_ms)} so far` : formatWork(item.work_ms)}</span>
           </span>
+          <PlaybookCell item={item} />
         </span>
         <StatusPill status={item.status} />
       </button>
@@ -100,11 +104,29 @@ function SideRow({ item, selected, onSelect, onBin, note }: {
   );
 }
 
-/** "Your Frontier tasks" in full screen (spec 2026-11-07 §1): search, filters and rows on the
+/** "Parallel Frontier Tasks" in full screen (spec 2026-11-07 §1): search, filters and rows on the
  * left, the selected task's results on the right with Stop and Delete. No chat inputs. */
 export function FullView({
-  list, theme = 'light', actions, selected, onSelect, pane, paneNote, live, onStop, onExit,
+  list, theme = 'light', actions, selected, onSelect, pane, paneNote, live, onStop, onExit, from = 'list',
 }: FullViewProps) {
+  // Under 900 px (Codex's side panel, a phone) the panes stack: the list, or the open task with
+  // a way back to it. The selection is kept, so widening the frame shows both again.
+  const narrow = useNarrow();
+  const [showPane, setShowPane] = useState(from === 'task');
+  // The stacked list unmounts while a task is open: keep where it was scrolled, and which row
+  // to hand focus back to, so "All tasks" returns to the same place (review 2026-11-07).
+  const listRef = useRef<HTMLElement>(null);
+  const listScroll = useRef(0);
+  const returnTo = useRef<string | null>(null);
+  const pick = (taskId: string) => {
+    listScroll.current = listRef.current?.scrollTop ?? 0;
+    onSelect(taskId);
+    setShowPane(true);
+  };
+  const backToList = () => {
+    returnTo.current = selected;
+    setShowPane(false);
+  };
   const f = list.filters;
   const [q, setQ] = useState(f.query ?? '');
   const [loading, setLoading] = useState<'filter' | 'more' | null>(null);
@@ -212,6 +234,17 @@ export function FullView({
     setRowConfirm(it.task_id);
   };
 
+  // Narrow: the pane replaces the list once a task is open (and none open means the list).
+  const stackPane = narrow && showPane && !!selected;
+  useLayoutEffect(() => {
+    const id = returnTo.current;
+    const nav = listRef.current;
+    if (stackPane || id === null || !nav) return;
+    returnTo.current = null;
+    nav.scrollTop = listScroll.current;
+    const row = Array.from(nav.querySelectorAll<HTMLElement>('.fc-frow')).find((r) => r.dataset.task === id);
+    (row?.querySelector<HTMLElement>('.fc-frow-open') ?? nav.querySelector<HTMLInputElement>('#fc-q'))?.focus();
+  }, [stackPane]);
   const dayChoices = (DAYS as readonly number[]).includes(f.days) ? [...DAYS] : [...DAYS, f.days].sort((a, b) => a - b);
   const cap = f.query ? `${list.total === 1 ? '1 match' : `${list.total} matches`} · newest first` : 'Newest first';
   const empty = f.query
@@ -219,11 +252,11 @@ export function FullView({
     : `No tasks in the ${DAYS_LABEL(f.days).toLowerCase()}.`;
 
   return (
-    <div class="fc-full" data-theme={theme}>
+    <div class={narrow ? 'fc-full fc-full-stack' : 'fc-full'} data-theme={theme}>
       <header class="fc-full-head">
         <Mark />
         <div class="fc-heading">
-          <div class="fc-title">Your Frontier tasks</div>
+          <div class="fc-title">Parallel Frontier Tasks</div>
           <div class="fc-org">{[list.org, `${list.total} ${list.total === 1 ? 'task' : 'tasks'} in the ${DAYS_LABEL(f.days).toLowerCase()}`].filter(Boolean).join(' · ')}</div>
         </div>
         <div class="fc-fchips" role="group" aria-label="Filters">
@@ -240,7 +273,7 @@ export function FullView({
         <button type="button" class="fc-secondary fc-secondary-sm fc-exit" onClick={onExit}>Exit full screen</button>
       </header>
       <div class="fc-full-body">
-        <nav class="fc-full-list" aria-label="Tasks">
+        {stackPane ? null : <nav class="fc-full-list" aria-label="Tasks" ref={listRef}>
           <div class="fc-search">
             <label class="fc-sr" for="fc-q">Search task titles</label>
             <svg class="fc-search-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
@@ -260,7 +293,7 @@ export function FullView({
               ) : (
                 <SideRow key={it.task_id} item={it} selected={it.task_id === selected}
                   note={rowNote === it.task_id ? 'Stop it first, then delete it.' : null}
-                  onSelect={() => onSelect(it.task_id)} onBin={() => bin(it)} />
+                  onSelect={() => pick(it.task_id)} onBin={() => bin(it)} />
               ))}
             </ul>
           ) : <p class="fc-empty">{empty}</p>}
@@ -270,11 +303,13 @@ export function FullView({
               {loading === 'more' ? null : <Chevron />}
             </button>
           ) : null}
-        </nav>
-        <main class="fc-full-pane">
+        </nav>}
+        {narrow && !stackPane ? null : <main class="fc-full-pane">
           {selected ? (
             <div class="fc-pane-bar">
-              <span class="fc-cap">Task</span>
+              {narrow ? (
+                <button type="button" class="fc-back" onClick={backToList}>All tasks</button>
+              ) : <span class="fc-cap">Task</span>}
               <span class="fc-strip-gap" />
               {live && onStop ? (
                 <button type="button" class="fc-secondary fc-secondary-sm" onClick={() => void onStop()}>Stop task</button>
@@ -308,7 +343,7 @@ export function FullView({
               <span class="fc-muted">Its results open here.</span>
             </div>
           )}
-        </main>
+        </main>}
       </div>
     </div>
   );

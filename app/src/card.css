@@ -468,7 +468,7 @@ button:disabled { cursor: default; }
   .fc-runner { width: 100%; opacity: 0.35; }
 }
 
-/* Your Frontier tasks (list) */
+/* Parallel Frontier Tasks (list) */
 .fc-head-list { padding-bottom: 12px; }
 .fc-heading:focus { outline: none; }
 .fc-fchips { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 20px 12px; }
@@ -501,6 +501,15 @@ button:disabled { cursor: default; }
 [data-theme='dark'] .fc-src-frontier { background: #1a2b45; color: #a9c6ef; }
 [data-theme='dark'] .fc-src-claude { background: #3a2716; color: #f2c08f; }
 [data-theme='dark'] .fc-src-scheduled { background: #2c2440; color: #c9b8ef; }
+/* The dashboard's Playbook column, under a row's meta line: the playbook (or "Ad hoc") and its skill. */
+.fc-pbline { display: flex; align-items: center; gap: 8px; min-width: 0; margin-top: 2px; }
+.fc-pb { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 11px var(--sans); padding: 1px 7px; border-radius: 6px; background: #e6eefa; color: #1d4e89; }
+.fc-pb-adhoc { background: #eef0f2; color: #3f4650; }
+.fc-pb-skill { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11.5px var(--sans); color: var(--muted); }
+.fc-pb-skill::before { content: '↳ '; color: var(--faint-ink); }
+.fc-pb-none { color: var(--faint-ink); }
+[data-theme='dark'] .fc-pb { background: #1a2b45; color: #a9c6ef; }
+[data-theme='dark'] .fc-pb-adhoc { background: #262d36; color: #c4ccd5; }
 .fc-pill-sm { font-size: 11.5px; padding: 3px 10px 3px 8px; gap: 6px; }
 .fc-pd { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .fc-lpill-running { background: var(--pill-bg); color: var(--fg); }
@@ -624,6 +633,10 @@ button:disabled { cursor: default; }
 .fc-bin-off { color: var(--faint); }
 .fc-bin-off:hover { background: var(--soft); }
 .fc-full-more { margin: 4px 20px 16px; align-self: flex-start; }
+.fc-full-stack .fc-full-body { grid-template-columns: minmax(0, 1fr); }
+.fc-full-stack .fc-full-list { border-right: 0; }
+.fc-full-stack .fc-full-head { padding: 12px 16px; gap: 10px; }
+.fc-full-stack .fc-pane-bar { padding: 10px 16px; }
 .fc-full-pane { overflow: auto; min-width: 0; display: flex; flex-direction: column; }
 .fc-pane-bar { flex: none; position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--card); }
 .fc-pane-bar .fc-cap { margin: 0; }
