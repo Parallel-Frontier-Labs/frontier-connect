@@ -1,11 +1,11 @@
 ---
 name: frontier
-description: Use whenever the user wants Frontier to do work (with or without their files), to follow up on, answer or steer a Frontier task in this chat, or to get a Frontier task's results saved locally. Gives the order of Frontier's tools from start to finish, moves folders up to Frontier and brings finished files back with a small helper script.
+description: Use whenever the user wants Parallel Frontier to do work (with or without their files), to follow up on, answer or steer a Frontier task in this chat, or to get a Frontier task's results saved locally. Gives the order of Frontier's tools from start to finish, moves folders up to Frontier and brings finished files back with a small helper script.
 ---
 
-# Frontier
+# Parallel Frontier
 
-Frontier runs long, multi-step work on its own agents and shows it in a live task card. The
+Parallel Frontier (Frontier for short) runs long, multi-step work on its own agents and shows it in a live task card. The
 Frontier tools (`frontier_*`) come from this plugin's connector. This skill gives the order to
 use them in, and adds one thing they cannot do alone: moving whole folders between this computer
 and a Frontier task, with the helper script `scripts/frontier.py` that sits next to this file.

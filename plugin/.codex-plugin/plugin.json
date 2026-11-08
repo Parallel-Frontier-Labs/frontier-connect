@@ -1,6 +1,6 @@
 {
   "name": "frontier",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Hand long, multi-step work on your files to Parallel Frontier's self-optimizing agents, follow it in a live task card, and get the finished files back into your folder.",
   "author": {
     "name": "Parallel Frontier Labs",
@@ -35,7 +35,7 @@
     "logo": "./assets/logo.png",
     "composerIcon": "./assets/icon.png",
     "defaultPrompt": [
-      "Use Frontier to summarize the statements in this folder."
+      "Summarize the statements in this folder."
     ],
     "longDescription": "Hand long, multi-step work on your files to Parallel Frontier's self-optimizing agents, follow it in a live task card, and get the finished files back into your folder."
   }
