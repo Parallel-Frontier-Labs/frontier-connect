@@ -19,7 +19,7 @@ export function DeletedCard({
         <Mark />
         <div class="fc-heading">
           <div class="fc-title fc-title-muted">{title || 'Frontier task'}</div>
-          <div class="fc-org">{org || 'Frontier'}</div>
+          <div class="fc-org">{org || 'Parallel Frontier'}</div>
         </div>
         <span class="fc-cap fc-deleted-label">Deleted</span>
       </header>

@@ -1,4 +1,4 @@
-# Frontier Connect
+# Parallel Frontier Connect
 
 **Enterprise AI agents, held to your standard on every run, from the AI app your team already uses.**
 
@@ -6,7 +6,7 @@
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![MCP 2026-07-28](https://img.shields.io/badge/MCP-2026--07--28-black.svg)](https://modelcontextprotocol.io)
 
-[Frontier](https://parallelfrontier.io) agents do your organization's work to your standard, with
+[Parallel Frontier](https://parallelfrontier.io) (Frontier for short) agents do your organization's work to your standard, with
 your best people's methods turned into playbooks that run the same way for everyone. Every run is
 scored against your own bar, and the runtime routes each step to the most efficient model that
 clears it. The playbooks, the scores and every improvement belong to your firm.
@@ -110,9 +110,9 @@ folder to a task and saves the delivered files back into your folder, never over
 The helper holds no credentials: it uses short-lived links handed out by your signed-in connector.
 
 - Codex: `codex plugin marketplace add Parallel-Frontier-Labs/frontier-connect`, then install
-  **Frontier**.
+  **Parallel Frontier**.
 - Cowork and Claude: **Customize > Plugins > Add > Add marketplace** with this repository's URL,
-  then install **Frontier** and connect it.
+  then install **Parallel Frontier** and connect it.
 - Microsoft Copilot: Copilot takes a Microsoft 365 app package instead. `python3
   scripts/build_copilot.py` builds `dist/frontier-copilot.zip` from [`copilot/`](copilot) and the same
   `frontier` skill; upload it in Copilot under **Cowork > Customize > Plugins > Add plugin**.

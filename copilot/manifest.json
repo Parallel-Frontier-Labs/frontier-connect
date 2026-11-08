@@ -1,7 +1,7 @@
 {
   "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.28/MicrosoftTeams.schema.json",
   "manifestVersion": "1.28",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "id": "cf30606b-6730-4ca7-8949-dd97b7761d06",
   "developer": {
     "name": "Parallel Frontier Labs",
@@ -10,12 +10,12 @@
     "termsOfUseUrl": "https://parallelfrontier.io/terms"
   },
   "name": {
-    "short": "Frontier",
-    "full": "Frontier by Parallel Frontier Labs"
+    "short": "Parallel Frontier",
+    "full": "Parallel Frontier"
   },
   "description": {
-    "short": "Delegate multi-step work on your files to Frontier and get the results back.",
-    "full": "Hand long, multi-step work on your files to Frontier's self-optimizing agents: research, analysis, document production and your organization's playbooks. Frontier runs the task end to end, asks when it needs you, and hands back the finished files."
+    "short": "Hand multi-step work on your files to Parallel Frontier; get the results back.",
+    "full": "Hand long, multi-step work on your files to Parallel Frontier's self-optimizing agents: research, analysis, document production and your organization's playbooks. Frontier runs the task end to end, asks when it needs you, and hands back the finished files."
   },
   "icons": {
     "color": "color.png",
@@ -28,8 +28,8 @@
   "agentConnectors": [
     {
       "id": "frontier",
-      "displayName": "Frontier",
-      "description": "Frontier's task tools: start, follow, answer, steer and stop a Frontier task, list playbooks and recent tasks, and move files in and out. Sign in with your Frontier account.",
+      "displayName": "Parallel Frontier",
+      "description": "Parallel Frontier's task tools: start, follow, answer, steer and stop a Frontier task, list playbooks and recent tasks, and move files in and out. Sign in with your Frontier account.",
       "toolSource": {
         "remoteMcpServer": {
           "mcpServerUrl": "https://api.parallelfrontier.io/mcp",

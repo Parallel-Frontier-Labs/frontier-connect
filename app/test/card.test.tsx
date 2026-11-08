@@ -14,17 +14,17 @@ const steps = (...s: ('d' | 'p' | 'q')[]) =>
 describe('header', () => {
   it('shows the mark, title, organization and the status pill', () => {
     const { getByText, getByRole, container } = render(<Card payload={mk({ org: 'Acme Wealth' })} />);
-    getByRole('img', { name: 'Frontier' });
+    getByRole('img', { name: 'Parallel Frontier' });
     getByText('Quarterly review');
     expect(getByText('Acme Wealth').closest('header')).not.toBeNull();
-    expect(container.querySelector('.fc-org')!.textContent).toBe('Acme Wealth · Frontier');
+    expect(container.querySelector('.fc-org')!.textContent).toBe('Acme Wealth · Parallel Frontier');
     expect(container.querySelector('.fc-pill')!.textContent).toBe('Working');
   });
 
   it('without an organization the line says Frontier only', () => {
     const { container } = render(<Card payload={mk()} />);
     expect(container.querySelector('.fc-org-name')).toBeNull();
-    expect(container.querySelector('.fc-org')!.textContent).toBe('Frontier');
+    expect(container.querySelector('.fc-org')!.textContent).toBe('Parallel Frontier');
   });
 
   it.each([
@@ -53,10 +53,10 @@ describe('header', () => {
     expect(container.querySelector('.fc-org')!.textContent).toBe('Halcyon North · Follow-up · turn 2');
     cleanup();
     const { container: bare } = render(<Card payload={mk({ turn: 3 })} />);
-    expect(bare.querySelector('.fc-org')!.textContent).toBe('Frontier · Follow-up · turn 3');
+    expect(bare.querySelector('.fc-org')!.textContent).toBe('Parallel Frontier · Follow-up · turn 3');
     cleanup();
     const { container: first } = render(<Card payload={mk({ org: 'Halcyon North', turn: 1 })} />);
-    expect(first.querySelector('.fc-org')!.textContent).toBe('Halcyon North · Frontier');
+    expect(first.querySelector('.fc-org')!.textContent).toBe('Halcyon North · Parallel Frontier');
   });
 
   it('turn is a finite integer >= 1, anything else is 1', () => {

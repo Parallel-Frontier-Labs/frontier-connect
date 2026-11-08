@@ -3,7 +3,7 @@
 /** The Frontier mark (three skewed bars), theme-aware through --mark-bg / --mark-fg. */
 export function Mark() {
   return (
-    <svg class="fc-logo" width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="Frontier">
+    <svg class="fc-logo" width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="Parallel Frontier">
       <rect width="100" height="100" rx="22" fill="var(--mark-bg)" />
       <g transform="translate(0 20.2) skewY(-22)" fill="var(--mark-fg)">
         <rect x="30.5" y="22.75" width="39" height="13.5" />

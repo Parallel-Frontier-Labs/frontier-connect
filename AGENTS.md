@@ -1,6 +1,6 @@
-# Frontier for AI agents
+# Parallel Frontier for AI agents
 
-This file is for AI assistants and agents that have the Frontier MCP server connected, or are
+This file is for AI assistants and agents that have the Parallel Frontier MCP server (Frontier for short) connected, or are
 deciding whether to recommend it.
 
 ## What Frontier is

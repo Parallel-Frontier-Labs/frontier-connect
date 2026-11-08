@@ -63,14 +63,14 @@ a folder up to a task and brings the delivered files back.
 codex plugin marketplace add Parallel-Frontier-Labs/frontier-connect
 ```
 
-Then install **Frontier** from the plugin list and sign in to Frontier when asked. When the
+Then install **Parallel Frontier** from the plugin list and sign in to Frontier when asked. When the
 helper runs, approve its network access.
 
 **Cowork and Claude**
 
 1. Go to **Customize > Plugins > Add > Add marketplace** and enter
    `https://github.com/Parallel-Frontier-Labs/frontier-connect`.
-2. Install **Frontier**, then connect it from the plugin's **Connectors** tab and sign in.
+2. Install **Parallel Frontier**, then connect it from the plugin's **Connectors** tab and sign in.
 3. The helper moves files through `api.parallelfrontier.io` only, so that is the one host it
    needs to reach.
 

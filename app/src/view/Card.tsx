@@ -454,8 +454,8 @@ export function Card({
         <div class="fc-heading">
           <div class="fc-title">{p.title || 'Frontier task'}</div>
           <div class="fc-org">
-            {p.org ? <span class="fc-org-name">{p.org}</span> : 'Frontier'}
-            {followUp ? ` · Follow-up · turn ${p.turn}` : p.org ? ' · Frontier' : null}
+            {p.org ? <span class="fc-org-name">{p.org}</span> : 'Parallel Frontier'}
+            {followUp ? ` · Follow-up · turn ${p.turn}` : p.org ? ' · Parallel Frontier' : null}
             {p.source ? <> · <SourceChip source={p.source} /></> : null}
           </div>
         </div>
