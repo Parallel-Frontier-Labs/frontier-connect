@@ -11,6 +11,15 @@ export const DELETE_FAILED = "Couldn't delete the task. Try again.";
 export const UPLOAD_FAILED = "Couldn't start the upload. Try again.";
 export const LINK_FAILED = "Couldn't prepare the download. Try again.";
 
+/** The system's colour setting, for a host that has not said which theme it uses. */
+export function systemTheme(): 'light' | 'dark' {
+  try {
+    return typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)')?.matches ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
 /** Only an https URL is ever opened or shown as a link (never javascript:, data: or the like). */
 export function safeHttps(u: unknown): string | null {
   if (typeof u !== 'string' || u.length > 8192) return null;
@@ -114,8 +123,10 @@ export function createHostBridge(
       for (const l of listeners) l(sc);
     }
   };
+  // A host that has not sent a theme yet (before the handshake, or one that sends it late) gets the
+  // system's setting, not light: a light card on a dark chat flashes white until the theme lands.
   const themeOf = (ctx?: { theme?: string } | null): 'light' | 'dark' =>
-    ctx?.theme === 'dark' ? 'dark' : 'light';
+    ctx?.theme === 'dark' || ctx?.theme === 'light' ? ctx.theme : systemTheme();
   const themeListeners: ((t: 'light' | 'dark') => void)[] = [];
   // MCP Apps hosts (Codex, ChatGPT, Claude) draw their own rounded, bordered frame around an
   // inline or pip view, and the host context has no "frame" hint; only fullscreen fills a bare
@@ -179,6 +190,10 @@ export function createHostBridge(
       return r?.isError ? null : withPromptAccess(parsePayload(r?.structuredContent), r);
     },
     theme: () => themeOf(app.getHostContext?.()),
+    toolName() {
+      const name = (ctx() as { toolInfo?: { tool?: { name?: unknown } } } | null | undefined)?.toolInfo?.tool?.name;
+      return typeof name === 'string' && name ? name.slice(0, 64) : undefined;
+    },
     onThemeChange: (cb) => {
       themeListeners.push(cb);
     },

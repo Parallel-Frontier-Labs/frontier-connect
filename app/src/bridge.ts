@@ -40,6 +40,8 @@ export interface Bridge {
   /** frontier_get_task through the host (runs under the user's OAuth grant). */
   getTask(taskId: string, after: number): Promise<TaskPayload | null>;
   theme(): 'light' | 'dark';
+  /** The tool the host called to show this card, when the host says (picks the loading skeleton). */
+  toolName?(): string | undefined;
   /** The host changed its theme (light/dark toggle) while the card is open. */
   onThemeChange(cb: (t: 'light' | 'dark') => void): void;
   /** True while the host shows the card inside its own frame (every display mode but fullscreen,

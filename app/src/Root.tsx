@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { AnswerOutcome, Answers, Bridge, DeleteOutcome, DownloadOutcome, ListQuery, Stale } from './bridge';
 import { cardClass } from './format';
 import { Generations, type Guarded, type Tag } from './generation';
-import { createHostBridge, LINK_FAILED, LIST_FAILED } from './hostBridge';
+import { createHostBridge, LINK_FAILED, LIST_FAILED, systemTheme } from './hostBridge';
 import { appendPage, type ListPayload } from './list';
 import { BrowserFeed, postControl, postInput, sendHostReport, type FrameSource } from './browserFeed';
 import type { BrowserApi, Transport } from './view/BrowserPreview';
@@ -13,6 +13,8 @@ import { FullView } from './view/FullView';
 import type { PromptState } from './view/PromptBlock';
 import type { StripApi } from './view/Strip';
 import { AddFiles } from './view/AddFiles';
+import { Skeleton, skeletonKind } from './view/Skeleton';
+import type { FontsOutcome } from './fonts';
 import { NO_UPLOADS, type UploadApi } from './view/UploadPanel';
 import type { AddFilesPayload } from './upload/addFiles';
 import { sendFiles } from './upload/transfer';
@@ -66,14 +68,21 @@ const STALE: Stale = { kind: 'stale' };
 type Mode = { kind: 'task'; fromList: boolean } | { kind: 'list'; back?: boolean } | { kind: 'add' } | { kind: 'deleted'; fromList: boolean }
   | { kind: 'full'; from: 'list' | 'task' };
 
-export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: () => Bridge }) {
+export function Root({ makeBridge = () => createHostBridge(), fonts = null }: {
+  makeBridge?: () => Bridge;
+  /** startFonts(): the card stays a skeleton until it settles. Null: nothing to wait for. */
+  fonts?: Promise<FontsOutcome> | null;
+}) {
   const [payload, setPayload] = useState<TaskPayload | null>(null);
   const [add, setAdd] = useState<AddFilesPayload | null>(null);
   const [list, setListState] = useState<ListPayload | null>(null);
   const [mode, setMode] = useState<Mode>({ kind: 'task', fromList: false });
-  const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  // The first frame paints before the host bridge exists: start from the system setting, not light.
+  const [theme, setTheme] = useState<'light' | 'dark'>(systemTheme);
   const [embedded, setEmbedded] = useState(true);
   const [connectFailed, setConnectFailed] = useState(false);
+  const [fontsIn, setFontsIn] = useState(fonts === null);
+  const [tool, setTool] = useState<string | undefined>(undefined);
   const [canAnswer, setCanAnswer] = useState(false);
   const poller = useRef<Poller | null>(null);
   const bridgeRef = useRef<Bridge | null>(null);
@@ -217,6 +226,7 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
     bridge.onDisplayModeChange?.(readModes);
     bridge.onReady(() => {
       hostReady.current = true;
+      setTool(bridge.toolName?.());
       readModes();
       report();
       setTheme(bridge.theme());
@@ -231,6 +241,18 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  useEffect(() => {
+    if (!fonts) return;
+    let live = true;
+    void fonts.then((how) => {
+      if (!live) return;
+      // Shown without the fonts: keep the system fonts for good, so a late font cannot re-wrap the card.
+      if (how === 'timeout') document.documentElement.classList.add('fc-sysfont');
+      setFontsIn(true);
+    });
+    return () => { live = false; };
+  }, []);
 
   // Back on the list: restore the scroll position and put focus on the row that was opened.
   useEffect(() => {
@@ -586,6 +608,10 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
     setMode({ kind: 'list', back: !!origin.current });
   };
 
+  // Until the fonts are in, the skeleton holds the frame (a connect error shows at once).
+  const showing = fontsIn || connectFailed;
+  if (!showing) return <Skeleton kind={skeletonKind(tool)} theme={theme} />;
+
   // The task whose answers and downloads are current: the card's own, or the full view's pane task.
   shownTask.current = mode.kind === 'task' && payload ? payload.task_id
     : mode.kind === 'full' && payload && payload.task_id === fullSel ? fullSel : null;
@@ -643,5 +669,5 @@ export function Root({ makeBridge = () => createHostBridge() }: { makeBridge?: (
       </p>
     );
   }
-  return <p class="fc-loading">Loading the task…</p>;
+  return <Skeleton kind={skeletonKind(tool)} theme={theme} />;
 }

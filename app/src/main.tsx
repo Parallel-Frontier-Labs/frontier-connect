@@ -1,4 +1,6 @@
 import { render } from 'preact';
+import { startFonts } from './fonts';
 import { Root } from './Root';
 
-render(<Root />, document.getElementById('root')!);
+// Ask for the fonts before the first render, so they load while the host connects.
+render(<Root fonts={startFonts()} />, document.getElementById('root')!);

@@ -649,3 +649,34 @@ button:disabled { cursor: default; }
 .fc-pane-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
 .fc-full-pane > .fc-card, .fc-full-pane .fc-split-off > .fc-card { max-width: 860px; }
 .fc-full-pane .fc-split { height: auto; min-height: 100%; grid-template-columns: minmax(0, 1fr); }
+
+/* Loading skeleton (view/Skeleton.tsx): a fixed height per view, so the host sizes its frame once
+   at first paint and once at the swap. Real heights vary a lot (measured in a scripted host: task
+   159-450+, list 172 with no rows to 949 with ten, add files 246), so no height fits all. Each is at
+   most twice its view's smallest height less 53 px, so the move at the swap is never larger than the
+   old jump from the 53 px "Loading..." line, and smaller for every card but the very smallest.
+   Inside the host's own frame, like an embedded card: no border of its own. */
+.fc-skel { box-sizing: border-box; background: var(--card); display: flex; flex-direction: column; overflow: hidden; }
+.fc-skel-task { height: 240px; }
+.fc-skel-list { height: 280px; }
+.fc-skel-add { height: 246px; }
+.fc-skel-head { display: flex; align-items: center; gap: 12px; padding: 18px 20px 14px; }
+.fc-skel-mark { flex: none; width: 24px; height: 24px; border-radius: 7px; background: var(--skel); }
+.fc-skel-titles { flex: 1; display: flex; flex-direction: column; gap: 7px; }
+.fc-skel-pill { flex: none; width: 64px; height: 24px; border-radius: 999px; background: var(--skel); }
+.fc-skel-body { flex: 1; display: flex; flex-direction: column; gap: 14px; padding: 4px 20px 18px; }
+.fc-skel-bar { display: block; border-radius: 6px; background: var(--skel); }
+.fc-skel-box { display: block; height: 42px; border-radius: 12px; border: 1px solid var(--line); }
+.fc-skel-drop { height: 84px; border-style: dashed; }
+.fc-skel-chips { display: flex; gap: 8px; }
+.fc-skel-chips span { width: 96px; height: 30px; border-radius: 999px; background: var(--skel); }
+.fc-skel-row { display: flex; flex-direction: column; gap: 8px; padding: 12px 0; border-top: 1px solid var(--hair); }
+.fc-skel-foot { padding: 12px 20px; border-top: 1px solid var(--hair); background: var(--ground); }
+.fc-skel { --skel: #eceee9; }
+[data-theme='dark'].fc-skel, [data-theme='dark'] .fc-skel { --skel: #232b34; }
+/* The fonts missed the cap (fonts.ts) and the card showed in system fonts: keep them, so the late
+   web font cannot re-wrap the card and resize the host's frame. */
+:root.fc-sysfont {
+  --sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}

@@ -83,6 +83,43 @@ describe('createHostBridge', () => {
     expect(b.theme()).toBe('light');
   });
 
+  it('with no theme from the host, follows the system setting instead of assuming light', () => {
+    const saved = window.matchMedia;
+    let dark = true;
+    window.matchMedia = ((q: string) => ({ matches: q === '(prefers-color-scheme: dark)' && dark })) as unknown as typeof window.matchMedia;
+    try {
+      const app = fake({ getHostContext: vi.fn(() => undefined) });
+      const b = createHostBridge(app);
+      expect(b.theme()).toBe('dark');
+      app.getHostContext.mockReturnValue({ displayMode: 'inline' });
+      expect(b.theme()).toBe('dark');
+      dark = false;
+      expect(b.theme()).toBe('light');
+      // A theme the host does send always wins.
+      dark = true;
+      app.getHostContext.mockReturnValue({ theme: 'light' });
+      expect(b.theme()).toBe('light');
+      // A context change with no theme anywhere keeps following the system.
+      const seen: string[] = [];
+      b.onThemeChange((t) => seen.push(t));
+      app.getHostContext.mockReturnValue({ locale: 'fr' });
+      (app as unknown as { onhostcontextchanged: (p: unknown) => void }).onhostcontextchanged({ locale: 'fr' });
+      expect(seen).toEqual(['dark']);
+    } finally {
+      window.matchMedia = saved;
+    }
+  });
+
+  it('toolName reads the called tool from the host context, when the host sends it', () => {
+    const app = fake();
+    const b = createHostBridge(app);
+    expect(b.toolName!()).toBeUndefined();
+    app.getHostContext.mockReturnValue({ toolInfo: { id: 1, tool: { name: 'frontier_list_tasks', inputSchema: {} } } });
+    expect(b.toolName!()).toBe('frontier_list_tasks');
+    app.getHostContext.mockReturnValue({ toolInfo: { tool: { name: 42 } } });
+    expect(b.toolName!()).toBeUndefined();
+  });
+
   it('embedded: inside the host frame unless the host says fullscreen', () => {
     const app = fake();
     const b = createHostBridge(app);
