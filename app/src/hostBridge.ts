@@ -10,6 +10,8 @@ export const LIST_FAILED = "Couldn't load your tasks. Try again, or ask in the c
 export const DELETE_FAILED = "Couldn't delete the task. Try again.";
 export const UPLOAD_FAILED = "Couldn't start the upload. Try again.";
 export const LINK_FAILED = "Couldn't prepare the download. Try again.";
+/** How long the chat message waits for the optional model-context update before it goes anyway. */
+export const CONTEXT_WAIT_MS = 1000;
 
 /** The system's colour setting, for a host that has not said which theme it uses. */
 export function systemTheme(): 'light' | 'dark' {
@@ -286,7 +288,21 @@ export function createHostBridge(
       return url ? { kind: 'ok', url } : { kind: 'failed', message: UPLOAD_FAILED };
     },
     async sendMessage(text): Promise<boolean> {
-      if (!app.getHostCapabilities?.()?.message || typeof app.sendMessage !== 'function') return false;
+      const caps = app.getHostCapabilities?.();
+      // PFL-84: a host may show the card but never deliver its ui/message, and the task then never
+      // started. The same text also goes into the model's context (ui/update-model-context) where
+      // offered, so the model sees it on its next turn. Best effort: it never blocks the message.
+      // The message waits for it at most CONTEXT_WAIT_MS (a host that never answers would hold it
+      // back until the SDK's request timeout, a minute), so a quick host still gets it first.
+      if (caps?.updateModelContext && typeof app.updateModelContext === 'function') {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const update = Promise.resolve()
+          .then(() => app.updateModelContext({ content: [{ type: 'text', text }] }))
+          .catch(() => { /* the message below, or the card's "tell the chat" line, covers it */ });
+        await Promise.race([update, new Promise<void>((done) => { timer = setTimeout(done, CONTEXT_WAIT_MS); })]);
+        clearTimeout(timer);
+      }
+      if (!caps?.message || typeof app.sendMessage !== 'function') return false;
       try {
         const r = await app.sendMessage({ role: 'user', content: [{ type: 'text', text }] });
         return !r?.isError;

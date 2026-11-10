@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createHostBridge } from '../src/hostBridge';
+import { CONTEXT_WAIT_MS, createHostBridge } from '../src/hostBridge';
 import { parseAddFiles } from '../src/upload/addFiles';
 
 function fakeApp(over: Record<string, unknown> = {}) {
@@ -55,5 +55,51 @@ describe('host bridge uploads', () => {
     expect(await createHostBridge(none).sendMessage!('x')).toBe(false);
     const err = fakeApp({ sendMessage: vi.fn(async () => ({ isError: true })) });
     expect(await createHostBridge(err).sendMessage!('x')).toBe(false);
+  });
+
+  // PFL-84: Claude never received the card's "files are ready" message, so a task whose PDF had
+  // arrived never started. The card also leaves the same text in the model's context.
+  it('also leaves the text in the model context when the host offers it', async () => {
+    const updateModelContext = vi.fn(async () => ({}));
+    const app = fakeApp({ updateModelContext, getHostCapabilities: () => ({ serverTools: {}, message: {}, updateModelContext: {} }) });
+    expect(await createHostBridge(app).sendMessage!('Files ready')).toBe(true);
+    expect(updateModelContext).toHaveBeenCalledWith({ content: [{ type: 'text', text: 'Files ready' }] });
+  });
+
+  it('a host with model context but no messages still gets the context, and the card says so', async () => {
+    const updateModelContext = vi.fn(async () => ({}));
+    const sendMessage = vi.fn(async () => ({}));
+    const app = fakeApp({ updateModelContext, sendMessage, getHostCapabilities: () => ({ serverTools: {}, updateModelContext: {} }) });
+    expect(await createHostBridge(app).sendMessage!('Files ready')).toBe(false);
+    expect(updateModelContext).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('a refused or throwing model-context update never blocks the message', async () => {
+    const updateModelContext = vi.fn(async () => { throw new Error('no'); });
+    const app = fakeApp({ updateModelContext, getHostCapabilities: () => ({ serverTools: {}, message: {}, updateModelContext: {} }) });
+    expect(await createHostBridge(app).sendMessage!('Files ready')).toBe(true);
+    expect(app.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('a model-context update the host never answers does not hold the message back', async () => {
+    vi.useFakeTimers();
+    try {
+      const updateModelContext = vi.fn(() => new Promise(() => {})); // never settles
+      const app = fakeApp({ updateModelContext, getHostCapabilities: () => ({ serverTools: {}, message: {}, updateModelContext: {} }) });
+      const sent = createHostBridge(app).sendMessage!('Files ready');
+      await vi.advanceTimersByTimeAsync(CONTEXT_WAIT_MS);
+      expect(app.sendMessage).toHaveBeenCalledTimes(1);
+      expect(await sent).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never calls updateModelContext when the host does not offer it', async () => {
+    const updateModelContext = vi.fn(async () => ({}));
+    const app = fakeApp({ updateModelContext });
+    await createHostBridge(app).sendMessage!('x');
+    expect(updateModelContext).not.toHaveBeenCalled();
   });
 });

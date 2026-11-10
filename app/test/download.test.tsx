@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/preact';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { App } from '@modelcontextprotocol/ext-apps';
 import type { Bridge, LinkOutcome } from '../src/bridge';
@@ -291,7 +291,7 @@ describe('add files to a delivered task', () => {
   const sendClick = () => act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Send to Frontier' })); });
   it('offers Add files, tells the chat, and announces only new files in a second round', async () => {
     const tell = vi.fn(async (_t: string) => true);
-    const send = vi.fn(async (_t: string, files: any[]) => ({ sent: files.map((f) => f.path), failed: [], error: null }));
+    const send = vi.fn(async (_t: string, files: any[]) => ({ sent: files.map((f) => f.path), failed: [], skipped: [], error: null }));
     const upload = { enabled: true, send, tell };
     render(<DeliveredFiles files={[{ name: 'a.xlsx', path: 'a.xlsx' }]} upload={upload} taskId="task-1" />);
     fireEvent.click(screen.getByRole('button', { name: 'Add files to this task' }));
@@ -302,6 +302,21 @@ describe('add files to a delivered task', () => {
     await sendClick();
     expect(tell).toHaveBeenCalledTimes(2);
     expect(tell).toHaveBeenLastCalledWith('I added 1 new file to the Frontier task task-1 (m.pdf). Call frontier_continue_task for task-1 (if that tool isn\'t loaded yet, look it up by that exact name).');
+  });
+  it('tells the chat and shows the note when everything was listed, nothing uploaded', async () => {
+    const tell = vi.fn(async (_t: string) => true);
+    const send = vi.fn(async () => ({ sent: [], failed: [], skipped: ['d/a.pdf'], error: null }));
+    render(<DeliveredFiles files={[{ name: 'a.xlsx', path: 'a.xlsx' }]} upload={{ enabled: true, send, tell }} taskId="task-1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add files to this task' }));
+    const input = document.querySelector<HTMLInputElement>('input[multiple]:not([webkitdirectory])')!;
+    const f = new File(['x'], 'a.pdf');
+    Object.defineProperty(f, 'webkitRelativePath', { value: 'd/a.pdf' });
+    Object.defineProperty(input, 'files', { value: [f], configurable: true });
+    fireEvent.change(input);
+    await sendClick();
+    expect(tell).toHaveBeenCalledTimes(1);
+    expect(tell.mock.calls[0][0]).toMatch(/^Frontier listed 1 file for task task-1/);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Sent'));
   });
   it('shows no Add files without uploads', () => {
     render(<DeliveredFiles files={[{ name: 'a.xlsx', path: 'a.xlsx' }]} taskId="task-1" />);

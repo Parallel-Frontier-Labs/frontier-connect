@@ -403,9 +403,29 @@ describe('announcements and focus', () => {
 });
 
 describe('files ask uploads', () => {
+  it('tells the chat and shows the note when everything was listed, nothing uploaded', async () => {
+    const tell = vi.fn(async (_t: string) => true);
+    const upload = { enabled: true, send: vi.fn(async (..._a: any[]) => ({ sent: [], failed: [], skipped: ['d/a.pdf'], error: null })), tell };
+    render(<FilesAsk ask={{ ask_id: 'a1', kind: 'files', text: 'Upload' }} taskId="task-1" canSend send={vi.fn()} onSent={() => {}} upload={upload} />);
+    const input = document.querySelector<HTMLInputElement>('input[multiple]:not([webkitdirectory])')!;
+    const f = new File(['x'], 'a.pdf');
+    Object.defineProperty(f, 'webkitRelativePath', { value: 'd/a.pdf' });
+    Object.defineProperty(input, 'files', { value: [f], configurable: true });
+    fireEvent.change(input);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Send to Frontier' })); });
+    await flush();
+    expect(tell).toHaveBeenCalledTimes(1);
+    expect(tell.mock.calls[0][0]).toMatch(/^Frontier listed 1 file for task task-1, but none was uploaded/);
+    expect(upload.send.mock.calls[0][3]).toBe('Upload'); // Frontier judges the folder against its ask
+    // the request stays open: nothing went up, so the user can still pick the file itself
+    expect(screen.getByRole('status').textContent).toBe('Frontier listed 1 file but none was uploaded. Pick the file itself to send it.');
+    expect(screen.getByRole('button', { name: 'Add files' })).toBeTruthy();
+    expect(screen.getByRole('status').textContent).not.toContain('Sent');
+  });
+
   it('lets the user add the files Frontier asked for, then tells the chat', async () => {
     const tell = vi.fn(async (_t: string) => true);
-    const upload = { enabled: true, send: vi.fn(async (_t: string, files: any[]) => ({ sent: files.map((f) => f.path), failed: [], error: null })), tell };
+    const upload = { enabled: true, send: vi.fn(async (_t: string, files: any[]) => ({ sent: files.map((f) => f.path), failed: [], skipped: [], error: null })), tell };
     render(<FilesAsk ask={{ ask_id: 'a1', kind: 'files', text: 'Upload the 2023 statements' }} taskId="task-1" canSend send={vi.fn()} onSent={() => {}} upload={upload} />);
     const input = document.querySelector<HTMLInputElement>('input[multiple]:not([webkitdirectory])')!;
     Object.defineProperty(input, 'files', { value: [new File(['x'], '2023.pdf')], configurable: true });

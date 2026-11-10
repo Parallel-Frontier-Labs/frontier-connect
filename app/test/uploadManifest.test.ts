@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fixture from './fixtures/casefold.json';
-import { isHidden, MAX_FILES, plan, relpathKey, safeRelpath } from '../src/upload/manifest';
+import { isHidden, LIST_MAX, plan, relpathKey, safeRelpath } from '../src/upload/manifest';
 
 const file = (path: string, size = 3, type = '') => {
   const f = new File([new Uint8Array(size)], path.split('/').pop()!, { type });
@@ -70,13 +70,50 @@ describe('plan', () => {
     const p = plan([file('a.pdf'), file('b.pdf')], first.send);
     expect(p.send.map((f) => f.path)).toEqual(['a.pdf', 'b.pdf']);
   });
-  it('refuses more than the per-task caps before anything is sent', () => {
-    const many = Array.from({ length: MAX_FILES + 1 }, (_, i) => file(`f/${i}.txt`, 1));
-    expect(plan(many).error).toMatch(/at most 1000 files/);
-    const big = file('big.bin', 1);
-    Object.defineProperty(big, 'size', { value: 2 * 1024 ** 3 + 1 });
-    expect(plan([big]).error).toMatch(/more than 2 GiB/);
+  it('folder picks are not explicit and may exceed 1000 files; single picks are explicit', () => {
+    const folderFiles = Array.from({ length: 1500 }, (_, i) => file(`dir/f${i}.pdf`, 1));
+    const p = plan(folderFiles);
+    expect(p.error).toBeNull();
+    expect(p.send.every((f) => !f.explicit)).toBe(true);
+    expect(plan([file('a.pdf', 1)]).send[0].explicit).toBe(true);
   });
+
+  it('only folder files count against the 20000 listing cap; picked files never crowd it', () => {
+    const folder = Array.from({ length: LIST_MAX - 10 }, (_, i) => file(`d/f${i}.pdf`, 0));
+    const picked = Array.from({ length: 20 }, (_, i) => file(`p${i}.pdf`, 0));
+    expect(plan([...folder, ...picked]).error).toBeNull();
+    expect(plan([...Array.from({ length: LIST_MAX + 1 }, (_, i) => file(`d/f${i}.pdf`, 0))]).error).toMatch(/20000/);
+  });
+
+  it('a picked folder named attached goes up as "attached (2)", as in the helper', () => {
+    const p = plan([file('Attached/x.pdf'), file('attached/sub/y.pdf'), file('attached-not/z.pdf')]);
+    expect(p.send.map((f) => f.path)).toEqual(['attached (2)/x.pdf', 'attached (2)/sub/y.pdf', 'attached-not/z.pdf']);
+    expect(plan([new File(['1'], 'attached')]).send.map((f) => f.path)).toEqual(['attached']); // a file, not a folder
+  });
+
+  it('the alias for a folder named attached is the first attached (n) no picked folder uses', () => {
+    const p = plan([file('attached (2)/x.pdf'), file('attached/x.pdf')]);
+    expect(p.send.map((f) => f.path)).toEqual(['attached (2)/x.pdf', 'attached (3)/x.pdf']);
+    expect(p.notSent).toEqual([]);
+    const more = plan([file('attached/y.pdf')], p.send);  // added to the same pick: same alias
+    expect(more.send.map((f) => f.path)).toContain('attached (3)/y.pdf');
+  });
+
+  it('a folder pick keeps the folder name at the front of every path (D3), as the helper does', () => {
+    const p = plan([file('2024/statement.pdf'), file('2024/q1/a.pdf')]);
+    expect(p.send.map((f) => [f.path, f.explicit])).toEqual([['2024/statement.pdf', false], ['2024/q1/a.pdf', false]]);
+  });
+
+  it('refuses more than 20000 files, or explicit files over 1000 / 2 GiB', () => {
+    expect(plan(Array.from({ length: 1001 }, (_, i) => file(`f${i}.pdf`, 1))).error).toMatch(/1000/);
+    const over = plan(Array.from({ length: LIST_MAX + 1 }, (_, i) => file(`d/f${i}.pdf`, 0))).error;
+    expect(over).toBe(`That is ${LIST_MAX + 1} files in the folder; Frontier lists at most 20000 at a time. Pick a subfolder.`);
+    expect(over).not.toMatch(/per task/); // the listing cap is per listing, not per task
+    const big = file('big.bin', 1);
+    Object.defineProperty(big, 'size', { value: 3 * 1024 ** 3 });
+    expect(plan([big]).error).toMatch(/2 GiB/);
+  });
+
   it('says so when nothing is left to send', () => {
     expect(plan([file('x/.DS_Store')]).error).toBe('There are no files to send in what you picked.');
   });

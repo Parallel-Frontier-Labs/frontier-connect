@@ -1,16 +1,23 @@
 /** What the card sends for the files the user picked: the plugin helper's path rules
  * (plugin/skills/frontier/scripts/frontier.py safe_relpath, relpath_key, walk), checked before
- * anything leaves the card. Every entry is explicit: the card cannot re-read the folder later. */
-export interface PickedFile { path: string; size: number; mime: string; blob: Blob }
+ * anything leaves the card. Files picked one by one are explicit (always sent); a folder's files go
+ * through Frontier's shortlist, so some may come back listed, not uploaded. */
+/** `aliasOf`: the picked folder's own top name (`attached`) when its top was renamed. */
+export interface PickedFile { path: string; size: number; mime: string; blob: Blob; explicit: boolean; aliasOf?: string }
 export interface NotSent { path: string; reason: string }
 export interface Plan { send: PickedFile[]; notSent: NotSent[]; skipped: number; error: string | null; total: number }
 
-export const MAX_FILES = 1000;
+export const LIST_MAX = 20000;
+export const LIST_PAGE = 5000;
+export const LIST_PAGE_BYTES = 3 * 1024 * 1024; // and at most this much JSON per /list post (the server takes 4 MiB)
+export const UPLOAD_MAX_FILES = 1000;
+export const MAX_FILES = UPLOAD_MAX_FILES; // the old /manifest cap, kept for the fallback
 export const MAX_TOTAL_BYTES = 2 * 1024 ** 3;
 const MAX_RELPATH = 512;
 const MAX_SEGMENT_BYTES = 255;
 const RESERVED_TOP = '.frontier';
 const RESERVED_TOP_FILES = new Set(['folder-index.md', 'context.md']);
+const ATTACHED = 'attached';
 const DEVICES = new Set(['CON', 'PRN', 'AUX', 'NUL', ...[1, 2, 3, 4, 5, 6, 7, 8, 9].flatMap((i) => [`COM${i}`, `LPT${i}`])]);
 const BAD_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 const CLUTTER = new Set(['thumbs.db', 'desktop.ini']);
@@ -76,16 +83,33 @@ function mimeOf(f: File, path: string): string {
   return MIME[ext] ?? 'application/octet-stream';
 }
 
+/** The first `attached (n)` (n >= 2) that no other picked folder uses as its top. */
+export function attachedAlias(taken: Set<string>): string {
+  for (let n = 2; ; n++) if (!taken.has(relpathKey(`${ATTACHED} (${n})`))) return `${ATTACHED} (${n})`;
+}
+
+const topKey = (p: string) => relpathKey(p.split('/', 1)[0]);
+
 export function plan(files: Iterable<File>, already: PickedFile[] = []): Plan {
+  const list = Array.from(files);
   const send = [...already];
   const keys = new Set(already.map((f) => relpathKey(f.path)));
   const notSent: NotSent[] = [];
   let skipped = 0;
-  for (const f of files) {
+  // `attached` is the attachments' own folder (the helper's --add files): a picked folder of that
+  // name goes up under an alias, the first `attached (n)` no other picked folder uses (a real
+  // `attached (2)` folder keeps its name), the same alias for every file of this pick.
+  const tops = new Set([...already.filter((f) => !f.aliasOf && f.path.includes('/')).map((f) => topKey(f.path)),
+    ...list.map(pathOf).filter((p) => p.includes('/')).map(topKey)]);
+  const alias = already.find((f) => f.aliasOf)?.path.split('/', 1)[0] ?? attachedAlias(tops);
+  for (const f of list) {
     const raw = pathOf(f);
     if (isHidden(raw)) { skipped++; continue; }
-    const path = safeRelpath(raw);
-    if (!path) { notSent.push({ path: raw, reason: 'this name is not usable on every system' }); continue; }
+    const fromFolder = !!(f as File & { webkitRelativePath?: string }).webkitRelativePath;
+    const safe = safeRelpath(raw);
+    if (!safe) { notSent.push({ path: raw, reason: 'this name is not usable on every system' }); continue; }
+    const aliased = fromFolder && safe.includes('/') && topKey(safe) === ATTACHED;
+    const path = aliased ? `${alias}${safe.slice(safe.indexOf('/'))}` : safe;
     const key = relpathKey(path);
     if (RESERVED_TOP_FILES.has(key)) { notSent.push({ path, reason: 'Frontier writes this name itself' }); continue; }
     if (keys.has(key)) {
@@ -93,12 +117,17 @@ export function plan(files: Iterable<File>, already: PickedFile[] = []): Plan {
       continue;
     }
     keys.add(key);
-    send.push({ path, size: f.size, mime: mimeOf(f, path), blob: f });
+    send.push({ path, size: f.size, mime: mimeOf(f, path), blob: f, explicit: !fromFolder, ...(aliased ? { aliasOf: ATTACHED } : {}) });
   }
   const total = send.reduce((n, f) => n + f.size, 0);
+  const explicit = send.filter((f) => f.explicit);
+  const explicitBytes = explicit.reduce((n, f) => n + f.size, 0);
   let error: string | null = null;
   if (!send.length) error = 'There are no files to send in what you picked.';
-  else if (send.length > MAX_FILES) error = `That is ${send.length} files; Frontier takes at most 1000 files per task. Pick a subfolder.`;
-  else if (total > MAX_TOTAL_BYTES) error = 'Those files add up to more than 2 GiB. Pick a subfolder, or fewer files.';
+  // Only folder files count against the listing cap, as on the server and in the helper: files
+  // picked one by one are always sent and never crowd a folder out.
+  else if (send.length - explicit.length > LIST_MAX) error = `That is ${send.length - explicit.length} files in the folder; Frontier lists at most ${LIST_MAX} at a time. Pick a subfolder.`;
+  else if (explicit.length > UPLOAD_MAX_FILES) error = `That is ${explicit.length} files picked one by one; Frontier takes at most ${UPLOAD_MAX_FILES} per task. Add them as a folder instead.`;
+  else if (explicitBytes > MAX_TOTAL_BYTES) error = 'The files you picked one by one add up to more than 2 GiB. Pick fewer.';
   return { send, notSent, skipped, error, total };
 }

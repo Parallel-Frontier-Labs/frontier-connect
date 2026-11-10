@@ -70,15 +70,17 @@ export function DeliveredFiles({ files, download = NO_DOWNLOADS, saved = null, u
   const [adding, setAdding] = useState(false);
   const [added, setAdded] = useState<string | null>(null);
   const announced = useRef(new Set<string>());
+  const announcedListed = useRef(0);
   const telling = useRef(false);
-  const onAdded = async (paths: string[]) => {
+  const onAdded = async (paths: string[], listed: number) => {
     const fresh = paths.filter((p) => !announced.current.has(p));
-    if (!taskId || telling.current || !fresh.length) return;
+    if (!taskId || telling.current || (!fresh.length && listed <= announcedListed.current)) return;
     telling.current = true;
     try {
-      const text = readyText('more', taskId, fresh);
+      const text = readyText('more', taskId, fresh, listed);
       const told = await upload.tell(text);
       fresh.forEach((p) => announced.current.add(p));
+      announcedListed.current = Math.max(announcedListed.current, listed);
       setAdded(told ? 'Sent. Ask for the follow-up in the chat.' : `Sent. Tell the chat: ${text}`);
     } finally {
       telling.current = false;
@@ -147,7 +149,7 @@ export function DeliveredFiles({ files, download = NO_DOWNLOADS, saved = null, u
       </div>
       {upload.enabled && taskId ? (
         <>
-          {adding ? <UploadPanel taskId={taskId} api={upload} onSent={(p) => void onAdded(p)} />
+          {adding ? <UploadPanel taskId={taskId} api={upload} onSent={(p, l) => void onAdded(p, l)} />
             : <button type="button" class="fc-toggle" aria-label="Add files to this task" onClick={() => setAdding(true)}>Add files</button>}
           {added ? <p class="fc-note" role="status">{added}</p> : null}
         </>

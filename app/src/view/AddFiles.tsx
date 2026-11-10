@@ -8,10 +8,10 @@ import { readyText, UploadPanel, type UploadApi } from './UploadPanel';
 export function AddFiles({ add, api, theme, embedded }: { add: AddFilesPayload; api: UploadApi; theme: 'light' | 'dark'; embedded: boolean }) {
   const [done, setDone] = useState<{ text: string; told: boolean } | null>(null);
   const told = useRef(false);
-  const onSent = async (sent: string[]) => {
+  const onSent = async (sent: string[], listed: number) => {
     if (told.current) return;
     told.current = true;
-    const text = readyText(add.existing ? 'more' : 'new', add.task_id, sent);
+    const text = readyText(add.existing ? 'more' : 'new', add.task_id, sent, listed);
     setDone({ text, told: await api.tell(text) });
   };
   return (
@@ -24,7 +24,7 @@ export function AddFiles({ add, api, theme, embedded }: { add: AddFilesPayload; 
             {done.told ? 'Files sent. Frontier is starting the task.' : `Files sent. Tell the chat your files are ready: ${done.text}`}
           </p>
         ) : (
-          <UploadPanel taskId={add.task_id} instruction={add.instruction} api={api} onSent={(s) => void onSent(s)} />
+          <UploadPanel taskId={add.task_id} instruction={add.instruction} api={api} onSent={(s, l) => void onSent(s, l)} />
         )}
       </div>
     </article>
