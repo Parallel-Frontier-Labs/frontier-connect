@@ -2,7 +2,7 @@
 """Frontier plugin helper: move a local folder up to a Frontier task, and bring the task's
 delivered files back down. Python 3 standard library only.
 
-    python3 frontier.py stage --ticket <ticket_url> --root <folder> [<path> ...]
+    python3 frontier.py stage --ticket <ticket_url> [--root <folder>]... [--add <file>]... [<path> ...]
     python3 frontier.py fetch --ticket <ticket_url> --to <folder>
 
 The ticket URL comes from a Frontier tool result (frontier_request_upload or
@@ -10,7 +10,7 @@ frontier_request_download). Its secret part is the URL fragment: this helper sen
 `Authorization: Ticket ...` header to api.parallelfrontier.io, never in a path or query, and never
 prints or logs it. The helper stores no credentials. File bytes travel over the short-lived
 presigned https links Frontier hands back, which must be https and are never followed through
-redirects. The helper reads only inside --root and writes only inside --to.
+redirects. The helper reads only inside the --root folders and the --add files, and writes only inside --to.
 
 Fetch saves into one folder per task under --to, found again on later fetches by a small marker
 file (.frontier-task) recording what was delivered at each path. A file that still holds what
@@ -28,6 +28,7 @@ JSON goes to stdout; lines for the user go to stderr.
 from __future__ import annotations
 
 import argparse
+import base64
 import concurrent.futures
 import errno
 import http.client
@@ -51,18 +52,27 @@ from pathlib import Path
 
 PROD_BASE = "https://api.parallelfrontier.io"
 TICKET_PATH = "/v1/connect/t"
-MAX_FILES = 1000
+LIST_MAX = 20_000  # files listed per task (names, folders, sizes only)
+LIST_PAGE = 5_000  # entries per /t/list post
+LIST_PAGE_BYTES = 3 * 1024 * 1024  # and at most this much JSON per post (the server takes 4 MiB)
+MAX_FILES = 1000  # an older backend's /t/manifest cap (fallback only)
+MAX_ROOTS = 64  # folders per stage (the server reads at most 64 identities per listing)
 MAX_TOTAL_BYTES = 2 * 1024 ** 3
+ATTACHED = "attached"
+DONE_TIMEOUT_S = 180  # /t/list/done shortlists up to 20,000 files before it answers
 WORKERS = 4
 TIMEOUT_S = 60
 MAX_JSON_BYTES = 32 * 1024 * 1024
 CHUNK = 1024 * 1024
-USER_AGENT = "frontier-plugin/0.2.7"
+USER_AGENT = "frontier-plugin/0.2.9"
 DEFAULT_MIME = "application/octet-stream"
 
 EXPIRED = ("This Frontier link has expired or was already used. Ask the assistant to request a "
            "new one and try again.")
 RATE_LIMITED = "Frontier is rate limiting these requests. Wait a minute, then ask again."
+BUSY = ("An earlier stage on this ticket is still being finished. Wait up to 5 minutes for it to "
+        "end, then get a new ticket (frontier_request_upload with the same task_id) and run the "
+        "same stage again: the files are listed and sent again.")
 PLAN_INACTIVE = ("Your Frontier plan is inactive, so Frontier cannot take files right now. Ask "
                  "your Frontier admin to restore the plan, then ask again.")
 NO_ACCESS = ("Frontier refused access for this account. Check that you are connected to Frontier "
@@ -253,7 +263,7 @@ def _opener(test: bool) -> urllib.request.OpenerDirector:
 def _read_json(resp) -> dict:  # noqa: ANN001
     data = resp.read(MAX_JSON_BYTES + 1)
     if len(data) > MAX_JSON_BYTES:
-        raise FrontierError("Frontier's answer was too large")
+        raise FrontierError("Frontier's answer was too large", diagnostic={"stage": "too_large"})
     try:
         out = json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
@@ -268,30 +278,41 @@ def _clean(text: object, limit: int = 200) -> str:
     return s[:limit]
 
 
-def ticket_call(origin: str, raw: str, method: str, sub: str, body: dict | None, test: bool) -> dict:
+def _detail(body: bytes) -> str:
+    try:
+        d = json.loads(body).get("detail")
+    except Exception:  # noqa: BLE001 - the detail is optional
+        return ""
+    return d if isinstance(d, str) else ""
+
+
+def ticket_call(origin: str, raw: str, method: str, sub: str, body: dict | None, test: bool,
+                timeout: float = TIMEOUT_S) -> dict:
     """One call to the ticket endpoint; the secret travels only in the Authorization header."""
     headers = {"Authorization": f"Ticket {raw}", "Accept": "application/json",
                "User-Agent": USER_AGENT}
     data = None
     if body is not None:
-        data = json.dumps(body).encode("utf-8")
+        # UTF-8, not \\uXXXX escapes: a CJK name costs 3 bytes, not 6 (list_pages measures this).
+        # safe_relpath refuses a lone surrogate (it cannot be encoded), so this never fails.
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(origin + TICKET_PATH + sub, data=data, method=method,
                                  headers=headers)
     try:
-        with _opener(test).open(req, timeout=TIMEOUT_S) as resp:
+        with _opener(test).open(req, timeout=timeout) as resp:
             return _read_json(resp)
     except urllib.error.HTTPError as exc:
         code = exc.code
         diag: dict = {"stage": "http", "status": code}
         detail = ""
         body = b""
-        if code in (400, 401, 403):
+        if code in (400, 401, 403, 404, 409):
             try:
                 body = exc.read(64 * 1024)
             except Exception:  # noqa: BLE001 - the body is optional
                 body = b""
-        if code == 400:
+        if code in (400, 409):
             try:
                 detail = _clean(json.loads(body).get("detail", ""))
             except Exception:  # noqa: BLE001 - the detail is optional
@@ -301,6 +322,8 @@ def ticket_call(origin: str, raw: str, method: str, sub: str, body: dict | None,
         if edge is not None:
             raise FrontierError(EDGE_BLOCKED, status=code,
                                 diagnostic={**diag, "edge": "network", "code": edge}) from None
+        if code == 404 and _detail(body) == "Not Found":  # the server's own 404: no such route here
+            raise FrontierError(EXPIRED, status=404, diagnostic={**diag, "route": "missing"}) from None
         if code == 404:
             raise FrontierError(EXPIRED, diagnostic=diag) from None
         if code == 429:
@@ -315,6 +338,11 @@ def ticket_call(origin: str, raw: str, method: str, sub: str, body: dict | None,
         if code >= 500:
             raise FrontierError(f"Frontier answered HTTP {code}; try again in a moment",
                                 diagnostic=diag) from None
+        if code == 409 and "being finished" in detail:
+            raise FrontierError(BUSY, status=409, diagnostic=diag) from None
+        if code == 409 and detail:
+            raise FrontierError(f"Frontier refused the request (HTTP 409): {detail}",
+                                status=409, diagnostic=diag) from None
         raise FrontierError(f"Frontier refused the request (HTTP {code}).", diagnostic=diag) from None
     except (urllib.error.URLError, http.client.HTTPException, OSError, socket.timeout) as exc:
         refused = _proxy_refused(exc)
@@ -384,6 +412,8 @@ class Local:
     explicit: bool
     dev: int = 0
     ino: int = 0
+    added: bool = False  # --add (under attached/); a named file inside a root is not
+    given: str = ""  # an added file's own name, made safe (what it goes up as unless taken)
 
     @property
     def mime(self) -> str:
@@ -427,14 +457,23 @@ def _hidden(name: str, full: str) -> bool:
     return bool(getattr(st, "st_flags", 0) & getattr(stat, "UF_HIDDEN", 0))  # macOS
 
 
-def walk(root: Path, paths: list[str]) -> list[Local]:
+class _Full(Exception):
+    """The walk reached its limit."""
+
+
+def walk(root: Path, paths: list[str], limit: int | None = None) -> list[Local]:
     """The files to offer under `root`: every visible regular file, or only the listed paths
-    (files, or folders walked the same way), which are flagged explicit. Skips hidden files and
-    folders, Office lock files (~$*), .DS_Store, Thumbs.db, symlinked folders and links that
-    leave the folder. Raises UsageError for a listed path outside `root`."""
+    (files, or folders walked the same way). A listed FILE is flagged explicit (always sent); the
+    files under a listed FOLDER are not: the folder only narrows the listing and Frontier picks
+    inside it. Skips hidden files and folders, Office lock files (~$*), .DS_Store, Thumbs.db,
+    symlinked folders and links that leave the folder. Every listed path is checked before the
+    walk starts: UsageError for one outside `root` or missing, even past the limit. With `limit`,
+    stops early on a huge folder and returns what it found (every named file, and at most
+    `limit + 1` others: named files never count against the limit)."""
     root_abs = os.path.abspath(str(root))
     root_real = os.path.realpath(root_abs)
     found: dict[str, Local] = {}
+    judged = [0]  # files found that are not named (only those count against `limit`)
 
     def add(full: str, explicit: bool) -> None:
         if not _inside(full, root_real):  # every file, not only links: junctions, mounts
@@ -447,7 +486,12 @@ def walk(root: Path, paths: list[str]) -> list[Local]:
             return
         rel = os.path.relpath(full, root_abs).replace(os.sep, "/")
         rel = unicodedata.normalize("NFC", rel)
-        found.setdefault(rel, Local(rel, full, st.st_size, explicit, st.st_dev, st.st_ino))
+        if rel in found:
+            return
+        found[rel] = Local(rel, full, st.st_size, explicit, st.st_dev, st.st_ino)
+        judged[0] += not explicit
+        if limit is not None and judged[0] > limit:
+            raise _Full
 
     def walk_dir(top: str, explicit: bool) -> None:
         for dirpath, dirnames, filenames in os.walk(top, followlinks=False):
@@ -460,8 +504,7 @@ def walk(root: Path, paths: list[str]) -> list[Local]:
                 if not _hidden(name, full):
                     add(full, explicit)
 
-    if not paths:
-        walk_dir(root_abs, False)
+    named: list[str] = []
     for p in paths:
         full = os.path.abspath(p if os.path.isabs(p) else os.path.join(root_abs, p))
         lexical_ok = full == root_abs or full.startswith(root_abs.rstrip(os.sep) + os.sep)
@@ -469,10 +512,18 @@ def walk(root: Path, paths: list[str]) -> list[Local]:
             raise UsageError(f"{p} is not inside {root}")
         if not os.path.lexists(full):
             raise UsageError(f"{p} does not exist")
-        if os.path.isdir(full):  # a link to a folder inside root counts, it was checked above
-            walk_dir(full, True)
-        else:
-            add(full, True)
+        named.append(full)
+    try:
+        if not paths:
+            walk_dir(root_abs, False)
+        for full in named:  # named files first: explicit even when a named folder holds them too
+            if not os.path.isdir(full):
+                add(full, True)
+        for full in named:
+            if os.path.isdir(full):  # a link to a folder inside root counts, it was checked above
+                walk_dir(full, False)
+    except _Full:
+        pass
     return sorted(found.values(), key=lambda f: f.rel)
 
 
@@ -567,71 +618,357 @@ def _with_retry(url: str, fn, *args) -> tuple[str | None, str | None]:  # noqa: 
     return "failed", None
 
 
+def _numbered(name: str, n: int) -> str:
+    stem, dot, ext = name.rpartition(".")
+    return f"{stem} ({n}).{ext}" if dot and stem else f"{name} ({n})"
+
+
+def _usable_name(name: str, fallback: str = "file") -> str:
+    """A name made usable on every system, for an attached file or a root folder's top (both are
+    always sent, so the name is fixed, never refused): control, format and separator characters
+    dropped, slashes replaced, trailing dots and spaces stripped ("Acme Inc." -> "Acme Inc"), a
+    Windows device stem prefixed with `_` (`_CON.pdf`), cut to MAX_SEGMENT_BYTES keeping the
+    extension; `fallback` when nothing usable is left."""
+    name = "".join(c for c in unicodedata.normalize("NFC", name)
+                   if unicodedata.category(c) not in _BAD_CATEGORIES)
+    name = name.replace("/", "_").replace("\\", "_").rstrip(". ") or fallback
+    if name.split(".", 1)[0].strip().upper() in _WINDOWS_DEVICES:
+        name = "_" + name
+    if len(name.encode("utf-8")) > MAX_SEGMENT_BYTES:
+        stem, dot, ext = name.rpartition(".")
+        ext = f".{ext}" if dot and stem and len(ext.encode()) <= MAX_EXT_BYTES else ""
+        stem = name[: len(name) - len(ext)] if ext else name
+        name = _cut(stem, MAX_SEGMENT_BYTES - len(ext.encode())).rstrip(". ") + ext
+    try:
+        safe_relpath(f"{ATTACHED}/{name}")
+    except ValueError:
+        return fallback
+    return name
+
+
+def _attach_name(folder: str, name: str, size: int, names: set[str],
+                 task: dict[str, tuple[int, str]]) -> str:
+    """The name an added file gets under `folder`: same name and same size as a file the task
+    already holds is the same file, sent again in place; a different file of that name (another
+    size) gets the next free `name (2).ext`, `(3)`... skipping names this run or the task already
+    use for something else. `task` is the task's folder state by key: (size, status). A row
+    that holds nothing (not `issued` nor a direct upload, `uploaded`) is free to take over."""
+    n, cand = 1, name
+    while True:
+        key = relpath_key(f"{folder}/{cand}")
+        held = task.get(key)
+        if key not in names and (held is None or held[1] not in ("issued", "uploaded")
+                                 or held[0] == size):
+            names.add(key)
+            return cand
+        n += 1
+        cand = _numbered(name, n)
+
+
+def collect(roots: list[str], adds: list[str], paths: list[str], limit: int,
+            task: TaskState | None = None,
+            ids: dict[str, str] | None = None) -> tuple[list[Local], bool]:
+    """Every file to list: each --add first (explicit, under attached/), then each root, always
+    under its folder's name (owner decision D3: `2024/statement.pdf`, never `statement.pdf`), so
+    two different folders sent to one task never share a path and a re-run keeps the same ones.
+    `attached` is the attachments' own folder: a root of that name goes up as `attached (2)`,
+    two roots of one name as `name` and `name (2)`. Returns (files, stopped): stopped when the folders
+    held more than `limit` files for Frontier to judge, which are then cut at `limit`. Files
+    named or added are always kept and never count against `limit`. `task` (the task's folder
+    state, from GET /t/files) names each --add file (_attach_name) and each root (_root_top):
+    roots go in order of their real paths, so the order they are given in never swaps the
+    numbered names. `ids` gets {top: identity} for this run's roots when the task has a salt."""
+    if paths and len(roots) != 1:
+        raise UsageError("paths after the options need exactly one --root; use --add for files outside it")
+    if len(roots) > MAX_ROOTS:
+        raise UsageError(f"at most {MAX_ROOTS} folders in one stage; send the others in another "
+                         "stage, with a new ticket for the same task")
+    for r in roots:
+        if not Path(r).is_dir():
+            raise UsageError(f"{r} is not a folder")
+    task = task or TaskState({}, {})
+    tops: set[str] = {relpath_key(ATTACHED)}
+    walked: list[Local] = []
+    for r in sorted(roots, key=lambda x: os.path.realpath(x)):
+        listed = walk(Path(r), paths, limit=limit)
+        # NFC first: a name stored decomposed (older Mac disks, zips) is the same name, not a
+        # rename; _usable_name normalises the same way.
+        raw = unicodedata.normalize("NFC", local_segment(Path(r).resolve().name))
+        name = _usable_name(raw, "folder")
+        rid = root_identity(task.salt, r) if task.salt else None
+        top = _root_top(name, rid, tops, task)
+        if top != raw:
+            why = ("another folder of that name is already there" if name == raw
+                   else "its name is not usable on every system")
+            print(f"{r} went up as {top}: {why}.", file=sys.stderr)
+        if rid is not None and ids is not None:
+            ids[top] = rid
+        for f in listed:
+            f.rel = f"{top}/{f.rel}"
+        walked += listed
+    files: list[Local] = []
+    if adds:
+        folder = ATTACHED
+        names: set[str] = set()
+        for a in adds:
+            try:
+                st = os.lstat(a)
+            except OSError:
+                raise UsageError(f"{a} does not exist") from None
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                raise UsageError(f"{a} is not a regular file (no folders or links with --add)")
+            given = _usable_name(os.path.basename(a))
+            name = _attach_name(folder, given, st.st_size, names, task.files)
+            files.append(Local(f"{folder}/{name}", os.path.abspath(a), st.st_size, True,
+                               st.st_dev, st.st_ino, added=True, given=given))
+    judged = 0
+    for f in walked:
+        if not f.explicit:
+            judged += 1
+            if judged > limit:
+                continue
+        files.append(f)
+    return files, judged > limit
+
+
+def list_pages(entries: list[dict]):
+    """The /t/list pages: each closes at LIST_PAGE entries or LIST_PAGE_BYTES of the JSON body
+    ticket_call sends (UTF-8, ensure_ascii=False), whichever comes first. A page always holds at
+    least one entry."""
+    room = LIST_PAGE_BYTES - len(json.dumps({"page": 1000, "files": []}, ensure_ascii=False).encode())
+    page: list[dict] = []
+    used = 0
+    for e in entries:
+        n = len(json.dumps(e, ensure_ascii=False).encode()) + 2  # ", " between entries
+        if page and (len(page) >= LIST_PAGE or used + n > room):
+            yield page
+            page, used = [], 0
+        page.append(e)
+        used += n
+    if page:
+        yield page
+
+
+@dataclass
+class TaskState:
+    """What the task already holds (GET /t/files on the upload ticket): files by key (size,
+    status), the identity each top folder is bound to (`tops`, by key), and the task's random
+    salt for this run's folder identities, made by the server (None: an older backend; no
+    identities are sent)."""
+
+    files: dict[str, tuple[int, str]]
+    tops: dict[str, str]
+    salt: str | None = None
+    task_id: str | None = None
+
+
+_ID = re.compile(r"[A-Za-z0-9_-]{16,64}")
+
+
+def task_files(origin: str, raw: str, test: bool) -> TaskState:
+    """The task's folder state. Empty from a backend without the route; anything unusable in the
+    answer is left out."""
+    try:
+        resp = ticket_call(origin, raw, "GET", "/files", None, test)
+    except FrontierError as exc:
+        diag = exc.diagnostic or {}
+        if diag.get("route") == "missing" or diag.get("stage") == "too_large":
+            # No state to name by: the server still refuses to overwrite another file or folder.
+            return TaskState({}, {})
+        raise
+    resp = resp if isinstance(resp, dict) else {}
+    out: dict[str, tuple[int, str]] = {}
+    rows = resp.get("files")
+    for r in rows if isinstance(rows, list) else []:
+        if (isinstance(r, dict) and isinstance(r.get("path"), str) and type(r.get("size")) is int
+                and isinstance(r.get("status"), str)):
+            out[relpath_key(r["path"])] = (r["size"], r["status"])
+    tops_in = resp.get("tops")
+    tops = {relpath_key(k): v for k, v in (tops_in.items() if isinstance(tops_in, dict) else [])
+            if isinstance(k, str) and isinstance(v, str) and _ID.fullmatch(v)}
+    salt, tid = resp.get("salt"), resp.get("task_id")
+    return TaskState(out, tops, salt if isinstance(salt, str) and _ID.fullmatch(salt) else None,
+                     tid if isinstance(tid, str) and tid else None)
+
+
+def _identity_path(folder: str) -> str:
+    """What a folder's identity hashes: its real path, or for a folder under a session mount
+    (Cowork and cloud sessions mount connected folders at .../mnt/<name>) only the part from the
+    last `mnt` segment on, so the same connected folder matches across sessions, whose mount
+    roots differ (owner decision 2026-11-09). The trade-off: two different folders of the same
+    name connected in different sessions count as the same folder. Native paths (macOS,
+    Windows) keep the full real path."""
+    real = os.path.realpath(folder)
+    parts = Path(real).parts
+    marks = [i for i, p in enumerate(parts[:-1]) if p == "mnt"]
+    return "/".join(parts[marks[-1]:]) if marks else real
+
+
+def root_identity(salt: str, folder: str) -> str:
+    """A folder's private identity in one task (owner decision 2026-11-09, review Q1-c): a
+    SHA-256 of the folder's real path salted with the task's random salt (16 bytes the server
+    makes per task and hands only to ticket holders), cut to 22 URL-safe characters. The path is
+    never sent, and a guessed path cannot be checked against an identity without the salt; the
+    same folder has unrelated ids in two tasks. The same folder on the same machine gets the same id (a re-run goes in place); a
+    moved or renamed folder gets another one, so it goes up alongside as "name (2)"."""
+    digest = hashlib.sha256(b"frontier-root\0" + salt.encode() + b"\0"
+                            + os.fsencode(_identity_path(folder))).digest()
+    return base64.urlsafe_b64encode(digest).decode()[:22]
+
+
+def _root_top(name: str, rid: str | None, used: set[str], task: TaskState) -> str:
+    """The top folder a root goes under: its name, or the first free "name (2)", "(3)"...: not
+    used in this run (nor `attached`), and in the task either not there, there with no identity
+    (an older plugin or the card: the same folder, as before), or bound to this root's id. A top
+    the task holds only as direct uploads (no folder ever went there) is another folder's."""
+    n, cand = 1, name
+    while True:
+        key = relpath_key(cand)
+        bound = task.tops.get(key)
+        under = [st for k, (_sz, st) in task.files.items() if k.startswith(key + "/")]
+        direct_only = bool(under) and all(st == "uploaded" for st in under)
+        if key not in used and not direct_only and (rid is None or bound is None or bound == rid):
+            used.add(key)
+            return cand
+        n += 1
+        cand = f"{name} ({n})"
+
+
+def _manifest(origin: str, raw: str, entries: list[dict], test: bool) -> dict:
+    entries = [{k: v for k, v in e.items() if k != "replace"} for e in entries]  # /t/list only
+    try:
+        return ticket_call(origin, raw, "POST", "/manifest", {"files": entries, "multipart": True}, test)
+    except FrontierError as exc:
+        if exc.status != 400:
+            raise
+        # A backend from before multipart rejects the unknown field before it uses the ticket:
+        # ask once more without it and every file gets a single put_url.
+        return ticket_call(origin, raw, "POST", "/manifest", {"files": entries}, test)
+
+
 def stage(args: argparse.Namespace) -> int:
     origin, raw = parse_ticket(args.ticket, args.base)
     test = args.base is not None
-    root = Path(args.root)
-    if not root.is_dir():
-        raise UsageError(f"{root} is not a folder")
-    listed = walk(root, args.paths)
+    if not (args.root or args.add):
+        raise UsageError("give --root <folder> or --add <file>")
+    # An added file needs the task's state to keep a different file of the same name apart
+    # (one of the ticket's requests, spent only when there are --add files).
+    # What the task holds: keeps another attachment or another folder of a taken name apart
+    # (one of the ticket's requests).
+    task = task_files(origin, raw, test)
+    ids: dict[str, str] = {}
+    listed, stopped = collect(args.root or [], args.add or [], args.paths, LIST_MAX, task, ids)
+    for f in listed:
+        own = unicodedata.normalize("NFC", os.path.basename(f.abs))
+        if f.added and f.rel.rsplit("/", 1)[-1] != own:
+            why = ("another file of that name is already there" if f.given == own
+                   else "its name is not usable on every system")
+            print(f"{own} went up as {f.rel}: {why}.", file=sys.stderr)
     files: list[Local] = []
     not_sent: list[str] = []
     keys: set[str] = set()
     reserved: list[str] = []
+    unusable_named: list[str] = []  # files the user named whose path cannot be sent: failures
+    why_named: dict[str, str] = {}
+    kept: dict[str, Local] = {}
     for f in listed:
         try:
             f.rel = safe_relpath(f.rel)
         except ValueError:
             not_sent.append(f.rel)
+            if f.explicit:
+                unusable_named.append(f.rel)
             continue
         if relpath_key(f.rel) in RESERVED_TOP_FILES:
             reserved.append(f.rel)
             not_sent.append(f.rel)
             continue
         if relpath_key(f.rel) in keys:
-            not_sent.append(f.rel)
+            other = kept[relpath_key(f.rel)]
+            same = (other.dev, other.ino) == (f.dev, f.ino) if f.ino else \
+                os.path.realpath(other.abs) == os.path.realpath(f.abs)
+            if f.explicit and not same:
+                # Two different files the user named differ only in case or accents (a
+                # case-sensitive file system): one key on the task, so the second is a failure,
+                # never a silent drop. Two spellings of one file on disk (case-insensitive macOS,
+                # NFC/NFD) are the same file: the second is dropped, harmlessly.
+                unusable_named.append(f.rel)
+                why_named[f.rel] = "another named file has the same name ignoring case"
+            else:
+                not_sent.append(f.rel)
             continue
         keys.add(relpath_key(f.rel))
+        kept[relpath_key(f.rel)] = f
         files.append(f)
     if reserved:
         print(f"Not sent: {', '.join(reserved)}. Frontier writes context.md and folder-index.md "
               "at the top of a task's folder itself; rename these to send them.", file=sys.stderr)
+    for rel in unusable_named:
+        why = why_named.get(rel, "its name is not usable on every system")
+        print(f"Could not upload {rel}: {why}; ask the user to rename it", file=sys.stderr)
+    # Identities only for usable tops that have files going up (the server reads the rest as the
+    # same folder anyway; an empty folder's top must never bind a name it does not use).
+    sent_tops = {relpath_key(f.rel.split("/", 1)[0]) for f in files if "/" in f.rel}
+    ids = {t: v for t, v in ids.items() if relpath_key(t) in sent_tops}
+    if not files and unusable_named:  # nothing else to send: report, never list nothing
+        print(json.dumps({"task_id": task.task_id, "uploaded": 0, "attached": 0, "listed": 0,
+                          "skipped": 0, "failed": unusable_named, "listing_stopped": stopped,
+                          "explicit_failed": unusable_named, "not_sent": not_sent}))
+        print("Next: ask the user to rename these files, then stage them again.", file=sys.stderr)
+        return 3
     if not files:
         raise UsageError("there are no files to upload in that folder")
-    if len(files) > MAX_FILES:
-        raise UsageError(f"that folder has {len(files)} files; Frontier takes at most {MAX_FILES} "
-                         "per task. Pick a subfolder, or list the files to send.")
-    if sum(f.size for f in files) > MAX_TOTAL_BYTES:
-        raise UsageError("those files add up to more than 2 GiB; pick a subfolder, or list the "
-                         "files to send.")
-    manifest = []
-    for f in files:
-        entry: dict = {"path": f.rel, "size": f.size, "mime": f.mime}
-        if f.explicit:
-            entry["explicit"] = True
-        manifest.append(entry)
+    # A file named inside a folder is the same file at the same path: when it changed since an
+    # earlier run, it replaces that upload (`replace`). An added file never does: another file of
+    # the same name got its own name above, and the server refuses a silent replacement.
+    entries = [{"path": f.rel, "size": f.size, "mime": f.mime,
+                **({"explicit": True} if f.explicit else {}),
+                **({"replace": True} if f.explicit and not f.added else {})}
+               for f in files]
+    if stopped:
+        print(f"This folder holds more than {LIST_MAX} files; Frontier listed the first {LIST_MAX}. "
+              "Ask the user which subfolders matter if the work needs others.", file=sys.stderr)
     print(f"Listing {len(files)} files for Frontier...", file=sys.stderr)
+    left_out: list[tuple[str, str]] = []  # files Frontier left out of the listing, with why
     try:
-        resp = ticket_call(origin, raw, "POST", "/manifest", {"files": manifest, "multipart": True}, test)
+        for n, page in enumerate(list_pages(entries), 1):
+            listed_ans = ticket_call(origin, raw, "POST", "/list",
+                                     {"page": n, "files": page, **({"roots": ids} if ids else {})},
+                                     test)
+            for x in listed_ans.get("not_sent") or [] if isinstance(listed_ans, dict) else []:
+                if isinstance(x, dict) and isinstance(x.get("path"), str):
+                    left_out.append((x["path"], _clean(x.get("reason")) or "not sent"))
+        resp = ticket_call(origin, raw, "POST", "/list/done", {"multipart": True}, test,
+                           timeout=DONE_TIMEOUT_S)
     except FrontierError as exc:
-        if exc.status != 400:
+        if (exc.diagnostic or {}).get("route") != "missing":
             raise
-        # A backend from before multipart rejects the unknown field before it uses the ticket:
-        # ask once more without it and every file gets a single put_url.
-        resp = ticket_call(origin, raw, "POST", "/manifest", {"files": manifest}, test)
-    by_rel = {f.rel: f for f in files}
+        if args.add or len(args.root or []) > 1 or len(files) > MAX_FILES or \
+                sum(f.size for f in files) > MAX_TOTAL_BYTES:
+            raise FrontierError("Frontier needs an update to take these files this way. Send one "
+                                f"folder of at most {MAX_FILES} files and 2 GiB, or try again later.") from None
+        resp = _manifest(origin, raw, entries, test)
+    # By key: a row the task already holds keeps its stored spelling (another case, or the
+    # spelling an open multipart upload was made from), and its link is still this file's.
+    by_key = {relpath_key(f.rel): f for f in files}
     uploads = resp.get("uploads") if isinstance(resp.get("uploads"), list) else []
-    skipped = resp.get("skipped") if isinstance(resp.get("skipped"), list) else []
-    failed: list[str] = []
+    sk = resp.get("skipped")
+    n_skipped = sk if isinstance(sk, int) and not isinstance(sk, bool) else len(sk) if isinstance(sk, list) else 0
+    failed: list[str] = list(unusable_named)
     bad_plans: list[str] = []  # an open upload server-side whose plan we cannot use: abort it
     singles: list[tuple[Local, dict]] = []
     multis: dict[str, tuple[Local, dict, list]] = {}
     seen: set[str] = set()
     for up in uploads:
         path = up.get("path") if isinstance(up, dict) else None
-        item = by_rel.get(path) if isinstance(path, str) else None
-        if item is None or path in seen:
-            failed.append(path if isinstance(path, str) else "?")
+        item = by_key.get(relpath_key(path)) if isinstance(path, str) else None
+        if item is None:
+            # Not a file this run listed (the backend scopes done to this ticket, so this should
+            # not happen): never PUT it, and never count it as this run's failure.
+            continue
+        path = item.rel  # this run's own spelling from here on
+        if path in seen:
+            failed.append(path)
             continue
         plan = _part_plan(up, item.size, test) if "parts" in up else None
         if plan is None and ("parts" in up or not link_ok(up.get("put_url"), test)):
@@ -644,6 +981,11 @@ def stage(args: argparse.Namespace) -> int:
             singles.append((item, up))
         else:
             multis[path] = (item, up, plan)
+    linked = seen | set(failed)
+    for f in files:  # a named or added file is always sent: no link for it is a failure
+        if f.explicit and f.rel not in linked:
+            failed.append(f.rel)
+            print(f"Could not upload {f.rel}: Frontier sent no upload link for it", file=sys.stderr)
     jobs = [(item, up["put_url"], up, 0, item.size) for item, up in singles]
     jobs += [(item, url, up, off, n) for item, up, plan in multis.values() for _i, off, n, url in plan]
     reasons: dict[str, str] = {}
@@ -679,12 +1021,12 @@ def stage(args: argparse.Namespace) -> int:
             fin = fin if isinstance(fin, dict) else {}
             done_l = fin.get("completed") if isinstance(fin.get("completed"), list) else []
             fail_l = fin.get("failed") if isinstance(fin.get("failed"), list) else []
-            completed = {p for p in done_l if isinstance(p, str)}
-            told = {f["path"]: _clean(f.get("reason")) for f in fail_l
+            completed = {relpath_key(p) for p in done_l if isinstance(p, str)}
+            told = {relpath_key(f["path"]): _clean(f.get("reason")) for f in fail_l
                     if isinstance(f, dict) and isinstance(f.get("path"), str)}
-            for r in done:
-                if r not in completed:
-                    reasons[r] = told.get(r) or "Frontier could not finish the upload"
+            for r in done:  # Frontier answers with the spelling the task's row keeps
+                if relpath_key(r) not in completed:
+                    reasons[r] = told.get(relpath_key(r)) or "Frontier could not finish the upload"
         except FrontierError as exc:
             for r in done:
                 reasons[r] = str(exc)
@@ -696,17 +1038,34 @@ def stage(args: argparse.Namespace) -> int:
         else:
             uploaded += 1
     net_failed = len(net & set(failed))
-    out: dict = {"task_id": resp.get("task_id"), "uploaded": uploaded, "skipped": len(skipped),
-                 "failed": failed}
-    if not_sent:
-        out["not_sent"] = not_sent
+    out: dict = {"task_id": resp.get("task_id"), "uploaded": uploaded,
+                 "attached": sum(1 for f in files if f.explicit and f.rel.split("/", 1)[0].startswith(ATTACHED)
+                                 and f.rel not in failed),
+                 "listed": len(files), "skipped": n_skipped, "failed": failed,
+                 "listing_stopped": stopped}
+    named_failed = unusable_named + [f.rel for f in files if f.explicit and f.rel in failed]
+    if named_failed:
+        out["explicit_failed"] = named_failed
+    for rel, why in left_out:
+        print(f"Not sent: {rel} ({why})", file=sys.stderr)
+    if not_sent or left_out:
+        out["not_sent"] = not_sent + [rel for rel, _why in left_out]
         if len(not_sent) > len(reserved):
             print(f"{len(not_sent) - len(reserved)} files were not sent: their names are not usable "
                   "on every system.", file=sys.stderr)
     if hosts:
         print(net_hint(hosts), file=sys.stderr)
-    print(f"Uploaded {uploaded} files to Frontier. {len(skipped)} more stay listed for Frontier "
-          "to ask for if the task needs them.", file=sys.stderr)
+    # /list/done says whether the task already exists (a follow-up); /manifest never does.
+    nxt = (f"frontier_continue_task for {out['task_id']}" if resp.get("existing") is True
+           else f"frontier_start_task with upload_id {out['task_id']}")
+    if named_failed or (failed and uploaded == 0):
+        # A file the user named or attached (or everything) did not go up: the task must not
+        # run without it. Retry those files with a new ticket before the next step.
+        nxt = (f"frontier_request_upload with task_id {out['task_id']} for a new ticket, then "
+               f"stage only the files that failed again; call {nxt} only when they are in, or "
+               "ask the user")
+    print(f"Files in: {uploaded} sent ({out['attached']} attached), {n_skipped} listed for Frontier "
+          f"to ask for. Next: {nxt}.", file=sys.stderr)
     print(json.dumps(out))
     if failed and uploaded == 0 and net_failed == len(failed):
         return 1
@@ -1401,10 +1760,11 @@ def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="frontier.py", description="Move files to and from a "
                                 "Frontier task using a ticket link from a Frontier tool result.")
     sub = p.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("stage", help="upload a folder (or listed paths in it) to a task")
+    s = sub.add_parser("stage", help="upload folders and attached files to a task")
     s.add_argument("--ticket", required=True, help="ticket_url from frontier_request_upload, or - to read it from stdin")
-    s.add_argument("--root", required=True, help="the folder to upload from")
-    s.add_argument("paths", nargs="*", help="only these files or subfolders (inside --root)")
+    s.add_argument("--root", action="append", help="a folder to upload from (repeat for several)")
+    s.add_argument("--add", action="append", help="a single file from anywhere, always sent (repeat)")
+    s.add_argument("paths", nargs="*", help="only these files or subfolders (inside a single --root)")
     s.add_argument("--base", help=argparse.SUPPRESS)
     g = sub.add_parser("fetch", help="download a task's delivered files")
     g.add_argument("--ticket", required=True, help="ticket_url from frontier_request_download, or - to read it from stdin")

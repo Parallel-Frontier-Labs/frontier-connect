@@ -64,7 +64,10 @@ class Fake:
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self.requests: list[tuple[str, str, dict]] = []  # (method, path, headers)
-        self.manifests: list[dict] = []
+        self.manifests: list[dict] = []  # what /t/manifest or /t/list/done was asked to take
+        self.lists: list[dict] = []  # bodies POSTed to /v1/connect/t/list
+        self.raw_lists: list[bytes] = []  # the same bodies as sent, bytes
+        self.no_listing = False  # an older backend: /list answers a bare "Not Found" 404
         self.puts: dict[str, tuple[bytes, dict]] = {}
         self.put_fail: dict[str, int] = {}  # path -> number of 500s before success
         self.put_status: dict[str, int] = {}  # path -> fixed status
@@ -75,10 +78,18 @@ class Fake:
         self.complete_raw: object = None  # when set, /complete answers with this
         self.skip_names: set[str] = set()
         self.manifest_status = 200
+        self.status_detail = "nope"  # the detail a refused /list, /list/done or /manifest gives
+        self.apart: set[str] = set()  # paths /list leaves out (beside a file uploaded separately)
         self.reject_multipart = False  # a pre-multipart backend: 400 on the unknown field
         self.extra_uploads: list[dict] = []
+        self.drop_uploads: set[str] = set()  # paths /list/done or /manifest gives no upload for
+        self.existing: bool | None = None  # /list/done's `existing` (None: not in the answer)
         self.put_url_override: dict[str, str] = {}
         self.download: dict = {}
+        self.task_files: list | None = None  # an upload ticket's GET /files: the task's rows
+        self.stored: dict[str, str] = {}  # listed path -> the spelling the task's row keeps
+        self.tops: dict[str, str] = {}  # GET /files `tops`: top folder -> its bound identity
+        self.salt: str | None = "S" * 22  # GET /files `salt`: the task's random identity salt
         self.blobs: dict[str, bytes] = {}
         self.blob_mode: dict[str, str] = {}  # name -> "short" | "redirect" | "500"
         self.base = ""
@@ -118,9 +129,70 @@ def make_handler(fake: Fake):
             with fake.lock:
                 fake.requests.append((self.command, self.path, dict(self.headers.items())))
 
+        def _plan(self, files: list[dict], multipart) -> tuple[list[dict], list[dict]]:
+            """The upload plan both /manifest and /list/done answer with."""
+            uploads, skipped = [], []
+            for f in files:
+                name = f["path"].rsplit("/", 1)[-1]
+                if name in fake.skip_names and not f.get("explicit"):
+                    skipped.append({"path": f["path"]})
+                    continue
+                if len(uploads) >= 1000 or f["path"] in fake.drop_uploads:
+                    skipped.append({"path": f["path"]})
+                    continue
+                i = len(uploads)
+                if multipart and f["path"] in fake.multipart:
+                    parts = []
+                    for n, size in enumerate(fake.multipart[f["path"]], 1):
+                        route = f"/part/{i}/{n}?sig=s3cr3t"
+                        parts.append({"n": n, "size": size, "put_url": f"{fake.base}{route}"})
+                        with fake.lock:
+                            fake.put_route = getattr(fake, "put_route", {})
+                            fake.put_route[route] = f"{f['path']}#{n}"
+                    uploads.append({"path": fake.stored.get(f["path"], f["path"]), "parts": parts,
+                                    "headers": {"Content-Type": f["mime"]}})
+                    continue
+                url = fake.put_url_override.get(f["path"], f"{fake.base}/put/{i}?sig=s3cr3t")
+                uploads.append({"path": fake.stored.get(f["path"], f["path"]), "put_url": url,
+                                "headers": {"Content-Type": f["mime"]}})
+                with fake.lock:
+                    fake.put_route = getattr(fake, "put_route", {})
+                    fake.put_route[f"/put/{i}?sig=s3cr3t"] = f["path"]
+            uploads += fake.extra_uploads
+            return uploads, skipped
+
         def do_POST(self):
             self._record()
             body = self._body()
+            if self.path in ("/v1/connect/t/list", "/v1/connect/t/list/done"):
+                if fake.no_listing:
+                    return self._json(404, {"detail": "Not Found"})
+                if not self._authed():
+                    return self._json(404, {"detail": "not found"})
+                if fake.manifest_status != 200:
+                    return self._json(fake.manifest_status, {"detail": fake.status_detail})
+                if self.path.endswith("/list"):
+                    b = json.loads(body)
+                    out = [f for f in b["files"] if f["path"] in fake.apart]
+                    with fake.lock:
+                        fake.lists.append({**b, "files": [f for f in b["files"] if f not in out]})
+                        fake.raw_lists.append(body)
+                    n = sum(len(x["files"]) for x in fake.lists)
+                    ans = {"task_id": TASK, "listed": n, "expires_in_s": 600}
+                    if out:
+                        ans["not_sent"] = [{"path": f["path"], "reason": "already in this task as "
+                                            "a file uploaded separately"} for f in out]
+                    return self._json(200, ans)
+                files = list({f["path"]: f for x in fake.lists for f in x["files"]}.values())  # a path listed twice is one
+                multipart = json.loads(body).get("multipart")
+                fake.manifests.append({"files": files, "multipart": multipart})
+                files = [f for f in files if f.get("explicit")] + [f for f in files if not f.get("explicit")]
+                uploads, skipped = self._plan(files, multipart)
+                ans = {"task_id": TASK, "uploads": uploads, "skipped": len(skipped),
+                       "listed": len(files), "expires_in_s": 600}
+                if fake.existing is not None:
+                    ans["existing"] = fake.existing
+                return self._json(200, ans)
             if self.path == "/v1/connect/t/saved" and self._authed():
                 with fake.lock:
                     fake.acks.append(json.loads(body))
@@ -133,7 +205,7 @@ def make_handler(fake: Fake):
                     fake.completes.append(b)
                 if fake.complete_raw is not None:
                     return self._json(200, fake.complete_raw)
-                ok = [p for p in b.get("complete", []) if p not in fake.complete_fail]
+                ok = [fake.stored.get(p, p) for p in b.get("complete", []) if p not in fake.complete_fail]
                 return self._json(200, {"completed": ok, "failed": [
                     {"path": p, "reason": "parts missing or the wrong size"}
                     for p in b.get("complete", []) if p in fake.complete_fail]})
@@ -147,31 +219,7 @@ def make_handler(fake: Fake):
                     fake.rejected.append(m)
                 return self._json(400, {"detail": "extra fields not permitted"})
             fake.manifests.append(m)
-            uploads, skipped = [], []
-            for f in m["files"]:
-                name = f["path"].rsplit("/", 1)[-1]
-                if name in fake.skip_names:
-                    skipped.append({"path": f["path"]})
-                    continue
-                i = len(uploads)
-                if m.get("multipart") and f["path"] in fake.multipart:
-                    parts = []
-                    for n, size in enumerate(fake.multipart[f["path"]], 1):
-                        route = f"/part/{i}/{n}?sig=s3cr3t"
-                        parts.append({"n": n, "size": size, "put_url": f"{fake.base}{route}"})
-                        with fake.lock:
-                            fake.put_route = getattr(fake, "put_route", {})
-                            fake.put_route[route] = f"{f['path']}#{n}"
-                    uploads.append({"path": f["path"], "parts": parts,
-                                    "headers": {"Content-Type": f["mime"]}})
-                    continue
-                url = fake.put_url_override.get(f["path"], f"{fake.base}/put/{i}?sig=s3cr3t")
-                uploads.append({"path": f["path"], "put_url": url,
-                                "headers": {"Content-Type": f["mime"]}})
-                with fake.lock:
-                    fake.put_route = getattr(fake, "put_route", {})
-                    fake.put_route[f"/put/{i}?sig=s3cr3t"] = f["path"]
-            uploads += fake.extra_uploads
+            uploads, skipped = self._plan(m["files"], m.get("multipart"))
             self._json(200, {"task_id": TASK, "uploads": uploads, "skipped": skipped,
                              "expires_in_s": 600})
 
@@ -198,6 +246,11 @@ def make_handler(fake: Fake):
             if self.path == "/v1/connect/t/files":
                 if not self._authed():
                     return self._json(404, {"detail": "not found"})
+                if fake.task_files is not None:
+                    ans = {"task_id": TASK, "files": fake.task_files, "tops": fake.tops}
+                    if fake.salt is not None:
+                        ans["salt"] = fake.salt
+                    return self._json(200, ans)
                 return self._json(200, fake.download)
             if self.path.startswith("/get/"):
                 name = self.path[len("/get/"):].split("?", 1)[0]
@@ -531,7 +584,24 @@ class Walk(Base):
                           "sub/.hidden": b"h"})
         files = fr.walk(root, [str(root / "a.pdf"), "sub"])
         got = {f.rel: f.explicit for f in files}
-        self.assertEqual(got, {"a.pdf": True, "sub/b.txt": True, "sub/c.txt": True})
+        # D1: a named file is explicit (always sent); a named folder only narrows the listing,
+        # and Frontier picks inside it.
+        self.assertEqual(got, {"a.pdf": True, "sub/b.txt": False, "sub/c.txt": False})
+
+    def test_a_named_file_inside_a_named_folder_stays_explicit(self):
+        root = self.tree({"sub/b.txt": b"2", "sub/c.txt": b"3"})
+        got = {f.rel: f.explicit for f in fr.walk(root, ["sub", "sub/c.txt"])}
+        self.assertEqual(got, {"sub/b.txt": False, "sub/c.txt": True})
+
+    def test_every_named_path_is_checked_before_the_walk_stops_at_its_limit(self):
+        root = self.tree({f"big/f{i}.txt": b"1" for i in range(5)})
+        (self.dir / "x.txt").write_text("x")
+        with self.assertRaises(fr.UsageError) as e:
+            fr.walk(root, ["big", "../x.txt"], limit=2)
+        self.assertIn("not inside", str(e.exception))
+        with self.assertRaises(fr.UsageError) as e:
+            fr.walk(root, ["big", "missing.pdf"], limit=2)
+        self.assertIn("does not exist", str(e.exception))
 
     def test_explicit_path_outside_root_refused(self):
         root = self.tree({"a.pdf": b"1"})
@@ -549,15 +619,16 @@ class Stage(Base):
         self.fake.skip_names = {"skip-me.bin"}
         code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
         self.assertEqual(code, 0, err)
-        self.assertEqual(out, {"task_id": TASK, "uploaded": 3, "skipped": 1, "failed": []})
+        self.assertEqual(out, {"task_id": TASK, "uploaded": 3, "attached": 0, "listed": 4,
+                               "skipped": 1, "failed": [], "listing_stopped": False})
         m = self.fake.manifests[0]["files"]
         by = {f["path"]: f for f in m}
-        self.assertEqual(set(by), {"a.pdf", "sub/b.csv", "sub/c.txt", "skip-me.bin"})
-        self.assertEqual(by["a.pdf"]["size"], 6)
-        self.assertEqual(by["a.pdf"]["mime"], "application/pdf")
-        self.assertNotIn("explicit", by["a.pdf"])
-        self.assertEqual(self.fake.puts["sub/c.txt"][0], b"hello")
-        hdrs = {k.lower(): v for k, v in self.fake.puts["sub/c.txt"][1].items()}
+        self.assertEqual(set(by), {"src/a.pdf", "src/sub/b.csv", "src/sub/c.txt", "src/skip-me.bin"})
+        self.assertEqual(by["src/a.pdf"]["size"], 6)
+        self.assertEqual(by["src/a.pdf"]["mime"], "application/pdf")
+        self.assertNotIn("explicit", by["src/a.pdf"])
+        self.assertEqual(self.fake.puts["src/sub/c.txt"][0], b"hello")
+        hdrs = {k.lower(): v for k, v in self.fake.puts["src/sub/c.txt"][1].items()}
         self.assertEqual(hdrs["content-type"], "text/plain")
         self.assertEqual(hdrs["content-length"], "5")
         self.assertNotIn("authorization", hdrs)
@@ -576,68 +647,62 @@ class Stage(Base):
 
     def test_failed_upload_reported_after_one_retry(self):
         root = self.tree({"a.pdf": b"1", "b.pdf": b"2", "c.pdf": b"3"})
-        self.fake.put_fail = {"b.pdf": 2, "c.pdf": 1}  # b fails twice, c recovers on retry
+        self.fake.put_fail = {"src/b.pdf": 2, "src/c.pdf": 1}  # b fails twice, c recovers on retry
         code, out, _ = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
         self.assertEqual(code, 3)
         self.assertEqual(out["uploaded"], 2)
-        self.assertEqual(out["failed"], ["b.pdf"])
-        self.assertIn("c.pdf", self.fake.puts)
+        self.assertEqual(out["failed"], ["src/b.pdf"])
+        self.assertIn("src/c.pdf", self.fake.puts)
 
     def test_explicit_paths_sent_with_flag(self):
         root = self.tree({"a.pdf": b"1", "b.pdf": b"2"})
         code, out, _ = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root), "b.pdf")
         self.assertEqual(code, 0)
         self.assertEqual(self.fake.manifests[0]["files"],
-                         [{"path": "b.pdf", "size": 1, "mime": "application/pdf", "explicit": True}])
-
-    def test_too_many_files(self):
-        root = self.dir / "many"
-        root.mkdir()
-        for i in range(1001):
-            (root / f"f{i}.txt").write_bytes(b"")
-        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
-        self.assertEqual(code, 2)
-        self.assertIn("subfolder", err)
-        self.assertEqual(self.fake.manifests, [])
+                         [{"path": "src/b.pdf", "size": 1, "mime": "application/pdf", "explicit": True,
+                           "replace": True}])
+        self.assertEqual(out["attached"], 0)  # named inside the root: not an --add
 
     def test_unsafe_names_not_sent(self):
         root = self.tree({"ok.txt": b"1", "con.txt": b"2", "end./x.txt": b"3"})
         code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
         self.assertEqual(code, 0, err)
-        self.assertEqual([f["path"] for f in self.fake.manifests[0]["files"]], ["ok.txt"])
-        self.assertEqual(sorted(out["not_sent"]), ["con.txt", "end./x.txt"])
+        self.assertEqual([f["path"] for f in self.fake.manifests[0]["files"]], ["src/ok.txt"])
+        self.assertEqual(sorted(out["not_sent"]), ["src/con.txt", "src/end./x.txt"])
 
-    def test_reserved_top_names_not_sent(self):
+    def test_context_and_index_names_go_up_inside_the_folder(self):
+        # D3: a folder's files sit under its name, never at the task's top where Frontier writes
+        # context.md and folder-index.md, so those names are sent like any other.
         root = self.tree({"a.pdf": b"1", "context.md": b"c", "FOLDER-INDEX.md": b"i",
                           "sub/context.md": b"ok", "sub/folder-index.md": b"ok"})
         code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
         self.assertEqual(code, 0, err)
         self.assertEqual(sorted(f["path"] for f in self.fake.manifests[0]["files"]),
-                         ["a.pdf", "sub/context.md", "sub/folder-index.md"])
-        self.assertEqual(sorted(out["not_sent"]), ["FOLDER-INDEX.md", "context.md"])
-        self.assertIn("context.md", err)
-        self.assertIn("folder-index.md", err)
+                         ["src/FOLDER-INDEX.md", "src/a.pdf", "src/context.md",
+                          "src/sub/context.md", "src/sub/folder-index.md"])
+        self.assertNotIn("not_sent", out)
 
-    def test_explicit_reserved_name_refused_too(self):
+    def test_a_named_context_md_goes_up_inside_the_folder_too(self):
         root = self.tree({"context.md": b"c", "a.pdf": b"1"})
         code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root),
                                       "context.md", "a.pdf")
         self.assertEqual(code, 0, err)
-        self.assertEqual([f["path"] for f in self.fake.manifests[0]["files"]], ["a.pdf"])
+        self.assertEqual(sorted(f["path"] for f in self.fake.manifests[0]["files"]),
+                         ["src/a.pdf", "src/context.md"])
 
     def test_expired_upload_link_explained(self):
         root = self.tree({"a.pdf": b"1"})
-        self.fake.put_status = {"a.pdf": 403}
+        self.fake.put_status = {"src/a.pdf": 403}
         code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
         self.assertEqual(code, 3)
         self.assertIn("expired", err)
 
     def test_storage_unreachable_says_frontier_and_names_no_host(self):
         root = self.tree({"a.pdf": b"1"})
-        self.fake.put_url_override = {"a.pdf": "https://127.0.0.1:1/put?sig=s3cr3t"}
+        self.fake.put_url_override = {"src/a.pdf": "https://127.0.0.1:1/put?sig=s3cr3t"}
         code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
         self.assertEqual(code, 1)
-        self.assertEqual(out["failed"], ["a.pdf"])
+        self.assertEqual(out["failed"], ["src/a.pdf"])
         self.assertIn("Could not reach Frontier", err)
         for word in ("127.0.0.1", "allowlist", "allow list", "network settings"):
             self.assertNotIn(word, err)
@@ -665,6 +730,16 @@ class Stage(Base):
         self.assertEqual(code, 1)
         self.assertIn("rate", err.lower())
 
+    def test_a_ticket_still_finishing_says_get_a_new_ticket_and_stage_again(self):
+        root = self.tree({"a.pdf": b"1"})
+        self.fake.manifest_status = 409
+        self.fake.status_detail = "this ticket's listing is being finished: wait"
+        code, _out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 1)
+        self.assertIn("Wait up to 5 minutes for it to end, then get a new ticket "
+                      "(frontier_request_upload with the same task_id) and run the same stage "
+                      "again", err)
+
     def test_status_lines_say_what_to_do(self):
         """M-b: a paid lapse is not a retryable blip; access refusals are not either."""
         root = self.tree({"a.pdf": b"1"})
@@ -683,19 +758,568 @@ class Stage(Base):
 
     def test_upload_link_must_be_https_or_test_loopback(self):
         root = self.tree({"a.pdf": b"1", "b.pdf": b"2"})
-        self.fake.put_url_override = {"a.pdf": "http://example.com/put?sig=s3cr3t"}
+        self.fake.put_url_override = {"src/a.pdf": "http://example.com/put?sig=s3cr3t"}
         code, out, _ = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
         self.assertEqual(code, 3)
-        self.assertEqual(out["failed"], ["a.pdf"])
+        self.assertEqual(out["failed"], ["src/a.pdf"])
 
-    def test_upload_for_unknown_path_refused(self):
+    def test_upload_for_a_path_not_listed_in_this_run_is_ignored(self):
         root = self.tree({"a.pdf": b"1"})
         self.fake.extra_uploads = [{"path": "../etc/passwd", "put_url": f"{self.fake.base}/put/9",
+                                    "headers": {}},
+                                   {"path": "other-run.pdf", "put_url": f"{self.fake.base}/put/8",
                                     "headers": {}}]
         code, out, _ = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
-        self.assertEqual(code, 3)
+        self.assertEqual(code, 0)  # never PUT, never counted as this run's failure
         self.assertEqual(out["uploaded"], 1)
-        self.assertEqual(out["failed"], ["../etc/passwd"])
+        self.assertEqual(out["failed"], [])
+        self.assertFalse(any(p.startswith(("/put/9", "/put/8")) for _m, p, _h in self.fake.requests))
+
+    def test_a_named_file_with_no_upload_is_reported_failed(self):
+        root = self.tree({"a.pdf": b"1", "b.pdf": b"2"})
+        self.fake.drop_uploads = {"src/b.pdf"}
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root),
+                                      "a.pdf", "b.pdf")
+        self.assertEqual(code, 3)
+        self.assertEqual(out["failed"], ["src/b.pdf"])
+        self.assertIn("Could not upload src/b.pdf", err)
+
+    def test_a_failed_named_or_added_file_says_retry_not_start(self):
+        root = self.tree({"a.pdf": b"1", "b.pdf": b"2"})
+        att = self.dir / "uploads"
+        att.mkdir()
+        (att / "Plan.pdf").write_bytes(b"%PDF")
+        self.fake.put_status = {"attached/Plan.pdf": 403}
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root),
+                                      "--add", str(att / "Plan.pdf"))
+        self.assertEqual(code, 3)
+        self.assertEqual(out["explicit_failed"], ["attached/Plan.pdf"])
+        self.assertNotIn("Next: frontier_start_task", err)
+        self.assertIn(f"Next: frontier_request_upload with task_id {TASK} for a new ticket, then "
+                      "stage only the files that failed again", err)
+
+    def test_nothing_sent_says_retry_not_start(self):
+        root = self.tree({"a.pdf": b"1"})
+        self.fake.put_status = {"src/a.pdf": 403}
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 3)
+        self.assertNotIn("Next: frontier_start_task", err)
+        self.assertIn("only when they are in", err)
+        self.assertNotIn("explicit_failed", out)
+
+    def test_a_failed_folder_file_with_others_sent_still_says_start(self):
+        root = self.tree({"a.pdf": b"1", "b.pdf": b"2"})
+        self.fake.put_status = {"src/b.pdf": 403}
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 3)
+        self.assertIn(f"Next: frontier_start_task with upload_id {TASK}", err)
+
+    def test_an_added_file_with_an_unusable_name_goes_up_under_a_safe_one(self):
+        u = self.dir / "dl"
+        u.mkdir()
+        (u / "CON.pdf").write_bytes(b"1")
+        (u / "scan .pdf ").write_bytes(b"2")
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--add", str(u / "CON.pdf"),
+                                      "--add", str(u / "scan .pdf "))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(sorted(f["path"] for f in self.fake.lists[0]["files"]),
+                         ["attached/_CON.pdf", "attached/scan .pdf"])
+        self.assertNotIn("not_sent", out)
+        self.assertIn("CON.pdf went up as attached/_CON.pdf", err)
+
+    def test_a_named_file_with_an_unusable_name_is_a_failure_not_a_start(self):
+        root = self.tree({"a.pdf": b"1", "con.txt": b"2"})
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root),
+                                      "a.pdf", "con.txt")
+        self.assertEqual(code, 3)
+        self.assertEqual(out["explicit_failed"], ["src/con.txt"])
+        self.assertIn("src/con.txt", out["failed"])
+        self.assertNotIn("Next: frontier_start_task", err)
+        self.assertIn("Could not upload src/con.txt: its name is not usable on every system", err)
+
+    def test_two_named_files_differing_only_in_case_fail_the_second(self):
+        root = self.tree({"A.pdf": b"1", "a.pdf": b"22"})  # a case-sensitive file system
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root),
+                                      "A.pdf", "a.pdf")
+        self.assertEqual(code, 3, err)
+        self.assertEqual(out["explicit_failed"], ["src/a.pdf"])
+        self.assertIn("Could not upload src/a.pdf: another named file has the same name ignoring "
+                      "case", err)
+        self.assertNotIn("Next: frontier_start_task", err)
+
+    def test_two_spellings_of_one_file_in_case_are_not_a_failure(self):
+        # Case-insensitive macOS: Report.pdf and report.pdf name one file. A hard link stands in
+        # for that here: the same file on disk under both spellings goes up once, no failure.
+        root = self.tree({"Report.pdf": b"1"})
+        os.link(root / "Report.pdf", root / "report.pdf")
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root),
+                                      "Report.pdf", "report.pdf")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("explicit_failed", out)
+        self.assertEqual(out["not_sent"], ["src/report.pdf"])
+
+    def test_two_spellings_of_one_file_in_accents_are_not_a_failure(self):
+        nfc, nfd = unicodedata.normalize("NFC", "Résumé.pdf"), unicodedata.normalize("NFD", "résumé.pdf")
+        root = self.tree({nfc: b"1"})
+        os.link(root / nfc, root / nfd)
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root), nfc, nfd)
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("explicit_failed", out)
+
+    def test_two_different_files_differing_in_accents_and_case_fail_the_second(self):
+        nfc, nfd = unicodedata.normalize("NFC", "Résumé.pdf"), unicodedata.normalize("NFD", "résumé.pdf")
+        root = self.tree({nfc: b"1", nfd: b"22"})
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root), nfc, nfd)
+        self.assertEqual(code, 3, err)
+        self.assertEqual(out["explicit_failed"], ["src/résumé.pdf"])
+
+    def test_only_an_unusable_named_file_reports_without_listing(self):
+        root = self.tree({"con.txt": b"2"})
+        self.fake.task_files = []
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root), "con.txt")
+        self.assertEqual(code, 3, err)
+        self.assertEqual((out["task_id"], out["explicit_failed"]), (TASK, ["src/con.txt"]))
+        self.assertEqual(self.fake.lists, [])
+
+    def test_an_added_file_with_no_upload_is_reported_failed(self):
+        root = self.tree({"a.pdf": b"1"})
+        att = self.dir / "uploads"
+        att.mkdir()
+        (att / "Plan.pdf").write_bytes(b"%PDF")
+        self.fake.drop_uploads = {"attached/Plan.pdf"}
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root),
+                                      "--add", str(att / "Plan.pdf"))
+        self.assertEqual(code, 3)
+        self.assertEqual(out["failed"], ["attached/Plan.pdf"])
+        self.assertEqual(out["attached"], 0)
+        self.assertIn("attached/Plan.pdf", err)
+
+
+class Listing(Base):
+    def test_a_folder_goes_up_through_list_and_done(self):
+        root = self.tree({"a.pdf": b"1", "sub/b.pdf": b"22"})
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out, {"task_id": TASK, "uploaded": 2, "attached": 0, "listed": 2,
+                               "skipped": 0, "failed": [], "listing_stopped": False})
+        self.assertEqual([x["page"] for x in self.fake.lists], [1])
+        self.assertIn(f"Next: frontier_start_task with upload_id {TASK}", err)
+
+    def test_a_file_the_server_leaves_out_is_reported_not_sent(self):
+        root = self.tree({"notes.md": b"123456789", "a.pdf": b"1"})
+        self.fake.apart = {"src/notes.md"}
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out["not_sent"], ["src/notes.md"])
+        self.assertIn("Not sent: src/notes.md (already in this task as a file uploaded separately)", err)
+        self.assertEqual(out["uploaded"], 1)
+
+    def test_the_last_line_says_continue_for_an_existing_task(self):
+        root = self.tree({"a.pdf": b"1"})
+        self.fake.existing = True
+        code, _out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"Next: frontier_continue_task for {TASK}.", err)
+        self.assertNotIn("frontier_start_task", err)
+        self.fake.existing = False
+        self.fake.lists.clear()
+        _code, _out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertIn(f"Next: frontier_start_task with upload_id {TASK}", err)
+
+    def test_the_manifest_fallback_keeps_the_start_wording(self):
+        root = self.tree({"a.pdf": b"1"})
+        self.fake.no_listing = True
+        code, _out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"Next: frontier_start_task with upload_id {TASK}", err)
+
+    def test_pages_of_5000(self):
+        root = self.dir / "big"
+        root.mkdir()
+        for i in range(12_000):
+            (root / f"f{i:05d}.txt").write_bytes(b"")
+        code, out, _ = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual([len(x["files"]) for x in self.fake.lists], [5000, 5000, 2000])
+        self.assertEqual(out["listed"], 12_000)
+
+    def test_pages_close_at_3_mib_of_json_with_long_non_ascii_paths(self):
+        name = "\u00e9t\u00e9-\u5e74\u5ea6-" * 30  # 13 UTF-8 bytes per 8 characters
+        entries = [{"path": f"{name}/{name}{i:05d}.pdf", "size": 1, "mime": "application/pdf"}
+                   for i in range(4000)]
+        pages = list(fr.list_pages(entries))
+        self.assertGreater(len(pages), 1)
+        self.assertEqual([e for pg in pages for e in pg], entries)
+        for n, pg in enumerate(pages, 1):
+            body = json.dumps({"page": n, "files": pg}, ensure_ascii=False).encode()  # as sent
+            self.assertLessEqual(len(body), fr.LIST_PAGE_BYTES)
+        self.assertEqual([len(pg) for pg in fr.list_pages(entries[:10])], [10])
+        short = [{"path": f"f{i}.txt", "size": 0, "mime": "text/plain"} for i in range(12_000)]
+        self.assertEqual([len(pg) for pg in fr.list_pages(short)], [5000, 5000, 2000])
+
+    def test_pages_are_sent_and_measured_as_utf8(self):
+        name = "\u5e74\u5ea6" * 90  # 3 bytes each in UTF-8, 6 as a \\uXXXX escape
+        entries = [{"path": f"{name}/{i:05d}.pdf", "size": 1, "mime": "application/pdf"}
+                   for i in range(5000)]
+        self.assertEqual(len(list(fr.list_pages(entries))), 1)  # ~2.9 MiB as UTF-8, ~5.5 MiB escaped
+        root = self.tree({"\u00e9t\u00e9.txt": b"x"})
+        code, _out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 0, err)
+        self.assertIn("\u00e9t\u00e9.txt".encode(), self.fake.raw_lists[0])
+
+    def test_stage_posts_byte_bounded_pages(self):
+        root = self.tree({f"\u00e9\u00e9\u00e9{i:02d}.txt": b"x" for i in range(30)})
+        with mock.patch.object(fr, "LIST_PAGE_BYTES", 1024):
+            code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 0, err)
+        self.assertGreater(len(self.fake.lists), 1)
+        self.assertEqual([x["page"] for x in self.fake.lists], list(range(1, len(self.fake.lists) + 1)))
+        self.assertEqual(sum(len(x["files"]) for x in self.fake.lists), 30)
+        for raw in self.fake.raw_lists:
+            self.assertLessEqual(len(raw), 1024)
+
+    def test_the_listing_stops_at_20000_and_says_so(self):
+        root = self.dir / "huge"
+        root.mkdir()
+        for i in range(20_005):
+            (root / f"f{i:05d}.txt").write_bytes(b"")
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertTrue(out["listing_stopped"])
+        self.assertEqual(out["listed"], 20_000)
+        self.assertIn("20000", err)
+
+    def test_named_and_added_files_are_never_cut_by_the_listing_cap(self):
+        root = self.tree({**{f"sub/f{i:02d}.txt": b"" for i in range(25)}, "zz-named.pdf": b"x"})
+        att = self.dir / "uploads"
+        att.mkdir()
+        (att / "Plan.pdf").write_bytes(b"%PDF")
+        files, stopped = fr.collect([str(root)], [str(att / "Plan.pdf")], ["sub", "zz-named.pdf"], 20)
+        rels = [f.rel for f in files]
+        self.assertTrue(stopped)
+        self.assertIn("src/zz-named.pdf", rels)
+        self.assertIn("attached/Plan.pdf", rels)
+        self.assertEqual(sum(1 for f in files if not f.explicit), 20)
+        files, stopped = fr.collect([str(root)], [], ["sub", "zz-named.pdf"], 25)
+        self.assertFalse(stopped)  # 25 judged files fit; the named one does not count
+        self.assertEqual(len(files), 26)
+
+    def test_add_files_land_under_attached_and_are_explicit(self):
+        root = self.tree({"a.pdf": b"1"})
+        att = self.dir / "uploads"
+        att.mkdir()
+        (att / "Plan.pdf").write_bytes(b"%PDF")
+        code, out, _ = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root),
+                                    "--add", str(att / "Plan.pdf"))
+        files = {f["path"]: f for f in self.fake.lists[0]["files"]}
+        self.assertTrue(files["attached/Plan.pdf"]["explicit"])
+        self.assertNotIn("explicit", files["src/a.pdf"])
+        self.assertEqual(out["attached"], 1)
+
+    def _attach(self, name: str, data: bytes, sub: str = "dl") -> str:
+        d = self.dir / sub
+        d.mkdir(exist_ok=True)
+        (d / name).write_bytes(data)
+        return str(d / name)
+
+    def test_another_attachment_of_the_same_name_is_kept_alongside(self):
+        self.fake.task_files = [{"path": "attached/report.pdf", "size": 5, "status": "issued"}]
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket,
+                                      "--add", self._attach("report.pdf", b"x" * 17))
+        self.assertEqual(code, 0, err)
+        self.assertEqual([f["path"] for f in self.fake.lists[0]["files"]], ["attached/report (2).pdf"])
+        self.assertEqual(out["attached"], 1)
+        self.assertIn("report.pdf went up as attached/report (2).pdf", err)
+
+    def test_the_same_attachment_again_is_sent_in_place(self):
+        self.fake.task_files = [{"path": "Attached/Report.pdf", "size": 5, "status": "issued"}]
+        code, _out, err = self.run_cli("stage", "--ticket", self.ticket,
+                                       "--add", self._attach("report.pdf", b"x" * 5))
+        self.assertEqual(code, 0, err)
+        self.assertEqual([f["path"] for f in self.fake.lists[0]["files"]], ["attached/report.pdf"])
+
+    def test_numbered_names_follow_the_same_rule_and_skip_taken_ones(self):
+        self.fake.task_files = [{"path": "attached/report.pdf", "size": 5, "status": "issued"},
+                                {"path": "attached/report (2).pdf", "size": 9, "status": "issued"}]
+        self.run_cli("stage", "--ticket", self.ticket, "--add", self._attach("report.pdf", b"x" * 9))
+        self.assertEqual([f["path"] for f in self.fake.lists[0]["files"]], ["attached/report (2).pdf"])
+        self.fake.lists.clear()
+        self.run_cli("stage", "--ticket", self.ticket,
+                     "--add", self._attach("report.pdf", b"x" * 17, sub="dl2"))
+        self.assertEqual([f["path"] for f in self.fake.lists[0]["files"]], ["attached/report (3).pdf"])
+
+    def test_each_run_reads_the_task_once_and_only_named_files_may_replace(self):
+        root = self.tree({"a.pdf": b"1", "b.pdf": b"2"})
+        self.run_cli("stage", "--ticket", self.ticket, "--root", str(root), "b.pdf")
+        self.assertEqual(sum(1 for m, _p, _h in self.fake.requests if m == "GET"), 1)
+        self.fake.requests.clear()
+        self.fake.lists.clear()
+        self.fake.task_files = []
+        self.run_cli("stage", "--ticket", self.ticket, "--root", str(root), "b.pdf",
+                     "--add", self._attach("c.pdf", b"3"))
+        by = {f["path"]: f for f in self.fake.lists[0]["files"]}
+        self.assertTrue(by["src/b.pdf"].get("replace"))
+        self.assertNotIn("replace", by["attached/c.pdf"])
+        self.assertEqual(sum(1 for m, _p, _h in self.fake.requests if m == "GET"), 1)
+
+    def test_add_only_without_a_root(self):
+        att = self.dir / "uploads"
+        att.mkdir()
+        (att / "a.pdf").write_bytes(b"1")
+        (att / "b.pdf").write_bytes(b"2")
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--add", str(att / "a.pdf"),
+                                      "--add", str(att / "b.pdf"))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(sorted(f["path"] for f in self.fake.lists[0]["files"]),
+                         ["attached/a.pdf", "attached/b.pdf"])
+
+    def test_a_single_root_goes_under_its_folder_name_too(self):
+        # D3: two different folders sent to one task never share a path; a re-run keeps them.
+        a = self.dir / "x" / "2024"
+        a.mkdir(parents=True)
+        (a / "statement.pdf").write_bytes(b"1")
+        (a / "named.pdf").write_bytes(b"2")
+        self.run_cli("stage", "--ticket", self.ticket, "--root", str(a), "named.pdf")
+        self.assertEqual([f["path"] for f in self.fake.lists[0]["files"]], ["2024/named.pdf"])
+        self.fake.lists.clear()
+        self.run_cli("stage", "--ticket", self.ticket, "--root", str(a))
+        first = sorted(f["path"] for f in self.fake.lists[0]["files"])
+        self.assertEqual(first, ["2024/named.pdf", "2024/statement.pdf"])
+        self.fake.lists.clear()
+        self.run_cli("stage", "--ticket", self.ticket, "--root", str(a))
+        self.assertEqual(sorted(f["path"] for f in self.fake.lists[0]["files"]), first)
+
+    def test_a_root_named_attached_never_shares_the_attachments_folder(self):
+        root = self.dir / "attached"
+        root.mkdir()
+        (root / "x.pdf").write_bytes(b"1")
+        self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual([f["path"] for f in self.fake.lists[0]["files"]], ["attached (2)/x.pdf"])
+        self.fake.lists.clear()
+        u = self.dir / "u"
+        u.mkdir()
+        (u / "x.pdf").write_bytes(b"22")
+        self.run_cli("stage", "--ticket", self.ticket, "--root", str(root), "--add", str(u / "x.pdf"))
+        self.assertEqual(sorted(f["path"] for f in self.fake.lists[0]["files"]),
+                         ["attached (2)/x.pdf", "attached/x.pdf"])
+
+    def _two_2024s(self):
+        a, b = self.dir / "A" / "2024", self.dir / "B" / "2024"
+        for d, data in ((a, b"aaaa"), (b, b"bbbbbb")):
+            d.mkdir(parents=True)
+            (d / "stmt.pdf").write_bytes(data)
+        return a, b
+
+    def test_root_order_never_swaps_the_numbered_names(self):
+        a, b = self._two_2024s()
+        self.fake.task_files = []
+        for order in ((a, b), (b, a)):
+            self.fake.lists.clear()
+            self.run_cli("stage", "--ticket", self.ticket, "--root", str(order[0]), "--root", str(order[1]))
+            by = {f["path"]: f["size"] for f in self.fake.lists[0]["files"]}
+            self.assertEqual(by, {"2024/stmt.pdf": 4, "2024 (2)/stmt.pdf": 6}, order)
+
+    def test_another_folder_of_a_name_the_task_holds_goes_alongside(self):
+        a, b = self._two_2024s()
+        self.fake.task_files = []
+        self.run_cli("stage", "--ticket", self.ticket, "--root", str(a))
+        first = self.fake.lists[0]
+        self.assertEqual([f["path"] for f in first["files"]], ["2024/stmt.pdf"])
+        rid = first["roots"]["2024"]
+        self.assertRegex(rid, r"^[A-Za-z0-9_-]{22}$")
+        body = json.dumps(first)
+        self.assertNotIn(str(self.dir), body)  # an identity, never the path
+        self.fake.lists.clear()
+        self.fake.task_files = [{"path": "2024/stmt.pdf", "size": 4, "status": "issued"}]
+        self.fake.tops = {"2024": rid}
+        code, _out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(b))
+        self.assertEqual(code, 0, err)
+        second = self.fake.lists[0]
+        self.assertEqual([f["path"] for f in second["files"]], ["2024 (2)/stmt.pdf"])
+        self.assertNotEqual(second["roots"]["2024 (2)"], rid)
+        self.assertIn("went up as 2024 (2)", err)
+        self.fake.lists.clear()  # the first folder again: a re-run, in place
+        self.run_cli("stage", "--ticket", self.ticket, "--root", str(a))
+        self.assertEqual(self.fake.lists[0]["roots"], {"2024": rid})
+        self.assertEqual([f["path"] for f in self.fake.lists[0]["files"]], ["2024/stmt.pdf"])
+
+    def test_the_identity_is_salted_by_the_server_never_by_the_task_id(self):
+        a, _b = self._two_2024s()
+        self.fake.task_files = []
+        self.run_cli("stage", "--ticket", self.ticket, "--root", str(a))
+        rid = self.fake.lists[0]["roots"]["2024"]
+        self.assertEqual(rid, fr.root_identity("S" * 22, str(a)))
+        self.assertNotEqual(rid, fr.root_identity(TASK, str(a)))
+        self.fake.lists.clear()
+        self.fake.salt = "T" * 22
+        self.run_cli("stage", "--ticket", self.ticket, "--root", str(a))
+        self.assertNotEqual(self.fake.lists[0]["roots"]["2024"], rid)
+        self.assertEqual(len(self.fake.lists[0]["roots"]["2024"]), 22)
+        self.fake.lists.clear()
+        self.fake.salt = None  # a backend that gives no salt: no identities are sent
+        self.run_cli("stage", "--ticket", self.ticket, "--root", str(a))
+        self.assertNotIn("roots", self.fake.lists[0])
+
+    def test_a_root_with_an_unusable_name_goes_up_under_a_safe_one(self):
+        acme, con, empty = self.dir / "Acme Inc.", self.dir / "x" / "CON", self.dir / "e" / "Empty"
+        for d in (acme, con, empty):
+            d.mkdir(parents=True)
+        (acme / "a.pdf").write_bytes(b"1")
+        (con / "b.pdf").write_bytes(b"2")
+        (empty / ".hidden").write_bytes(b"3")  # nothing of it is sent
+        u = self.dir / "dl"
+        u.mkdir()
+        (u / "c.pdf").write_bytes(b"4")
+        self.fake.task_files = []
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(acme),
+                                      "--root", str(con), "--root", str(empty), "--add", str(u / "c.pdf"))
+        self.assertEqual(code, 0, err)
+        lst = self.fake.lists[0]
+        self.assertEqual(sorted(f["path"] for f in lst["files"]),
+                         ["Acme Inc/a.pdf", "_CON/b.pdf", "attached/c.pdf"])
+        self.assertEqual(sorted(lst["roots"]), ["Acme Inc", "_CON"])  # only usable tops with files
+        self.assertIn("went up as Acme Inc", err)
+
+    def test_a_decomposed_folder_name_is_not_reported_as_renamed(self):
+        nfd = self.dir / unicodedata.normalize("NFD", "R\u00e9sum\u00e9s")
+        nfd.mkdir()
+        (nfd / "a.pdf").write_bytes(b"1")
+        acme = self.dir / "Acme Inc."
+        acme.mkdir()
+        (acme / "b.pdf").write_bytes(b"2")
+        code, _out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(nfd),
+                                       "--root", str(acme))
+        self.assertEqual(code, 0, err)
+        self.assertIn("R\u00e9sum\u00e9s/a.pdf", [f["path"] for f in self.fake.lists[0]["files"]])
+        self.assertNotIn("went up as R", err)
+        self.assertIn("went up as Acme Inc: its name is not usable on every system", err)
+
+    def test_a_single_root_ending_in_a_dot_is_sent(self):
+        acme = self.dir / "Acme Inc."
+        acme.mkdir()
+        (acme / "a.pdf").write_bytes(b"1")
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(acme))
+        self.assertEqual(code, 0, err)
+        self.assertEqual([f["path"] for f in self.fake.lists[0]["files"]], ["Acme Inc/a.pdf"])
+
+    def test_a_connected_folder_has_one_identity_across_session_mounts(self):
+        s1, s2 = self.dir / "s1" / "mnt" / "2024", self.dir / "s2" / "mnt" / "2024"
+        n1, n2 = self.dir / "home" / "a" / "2024", self.dir / "home" / "b" / "2024"
+        for d in (s1, s2, n1, n2):
+            d.mkdir(parents=True)
+        self.assertEqual(fr.root_identity("S" * 22, str(s1)), fr.root_identity("S" * 22, str(s2)))
+        self.assertNotEqual(fr.root_identity("S" * 22, str(n1)), fr.root_identity("S" * 22, str(n2)))
+        self.assertNotEqual(fr.root_identity("S" * 22, str(s1)), fr.root_identity("T" * 22, str(s1)))
+
+    def test_a_top_held_only_by_direct_uploads_is_another_folder(self):
+        a, _b = self._two_2024s()
+        self.fake.task_files = [{"path": "2024/notes.md", "size": 3, "status": "uploaded"}]
+        code, _out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(a))
+        self.assertEqual(code, 0, err)
+        self.assertEqual([f["path"] for f in self.fake.lists[0]["files"]], ["2024 (2)/stmt.pdf"])
+
+    def test_more_than_64_roots_is_a_clear_usage_error(self):
+        roots = []
+        for i in range(65):
+            d = self.dir / "many" / f"r{i}"
+            d.mkdir(parents=True)
+            (d / "a.pdf").write_bytes(b"1")
+            roots += ["--root", str(d)]
+        code, _out, err = self.run_cli("stage", "--ticket", self.ticket, *roots)
+        self.assertEqual(code, 2)
+        self.assertIn("at most 64 folders", err)
+
+    def test_a_task_state_too_large_to_read_does_not_stop_the_stage(self):
+        a, _b = self._two_2024s()
+        real = fr.ticket_call
+
+        def big(origin, raw, method, sub, body, test, timeout=fr.TIMEOUT_S):
+            if method == "GET" and sub == "/files":
+                raise fr.FrontierError("Frontier's answer was too large", diagnostic={"stage": "too_large"})
+            return real(origin, raw, method, sub, body, test, timeout)
+
+        with mock.patch.object(fr, "ticket_call", big):
+            code, _out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(a))
+        self.assertEqual(code, 0, err)
+        self.assertEqual([f["path"] for f in self.fake.lists[0]["files"]], ["2024/stmt.pdf"])
+
+    def test_a_top_with_no_identity_is_the_same_folder(self):
+        a, _b = self._two_2024s()
+        self.fake.task_files = [{"path": "2024/stmt.pdf", "size": 4, "status": "issued"}]
+        self.run_cli("stage", "--ticket", self.ticket, "--root", str(a))
+        self.assertEqual([f["path"] for f in self.fake.lists[0]["files"]], ["2024/stmt.pdf"])
+
+    def test_two_roots_go_under_their_names_and_same_names_get_numbered(self):
+        a = self.dir / "x" / "Clients"
+        b = self.dir / "y" / "Clients"
+        (a / "s").mkdir(parents=True)
+        (b / "s").mkdir(parents=True)
+        (a / "s" / "1.pdf").write_bytes(b"1")
+        (b / "s" / "1.pdf").write_bytes(b"2")
+        self.run_cli("stage", "--ticket", self.ticket, "--root", str(a), "--root", str(b))
+        self.assertEqual(sorted(f["path"] for f in self.fake.lists[0]["files"]),
+                         ["Clients (2)/s/1.pdf", "Clients/s/1.pdf"])
+
+    def test_a_root_with_its_own_attached_folder_and_duplicate_add_names(self):
+        root = self.tree({"attached/old.pdf": b"1"})
+        u1, u2 = self.dir / "u1", self.dir / "u2"
+        u1.mkdir()
+        u2.mkdir()
+        (u1 / "Plan.pdf").write_bytes(b"1")
+        (u2 / "plan.pdf").write_bytes(b"2")
+        self.run_cli("stage", "--ticket", self.ticket, "--root", str(root),
+                     "--add", str(u1 / "Plan.pdf"), "--add", str(u2 / "plan.pdf"))
+        paths = sorted(f["path"] for f in self.fake.lists[0]["files"])
+        self.assertEqual(paths, ["attached/Plan.pdf", "attached/plan (2).pdf", "src/attached/old.pdf"])
+
+    def test_add_refuses_a_folder_a_symlink_and_a_missing_file(self):
+        root = self.tree({"a.pdf": b"1"})
+        os.symlink(root / "a.pdf", self.dir / "link.pdf")
+        for bad in (str(root), str(self.dir / "link.pdf"), str(self.dir / "nope.pdf")):
+            code, _out, err = self.run_cli("stage", "--ticket", self.ticket, "--add", bad)
+            self.assertEqual(code, 2, bad)
+
+    def test_paths_with_two_roots_are_refused(self):
+        a, b = self.tree({"a.pdf": b"1"}), self.dir / "other"
+        b.mkdir()
+        code, _o, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(a), "--root", str(b), "a.pdf")
+        self.assertEqual(code, 2)
+        self.assertIn("one --root", err)
+
+    def test_nothing_to_send_is_a_usage_error(self):
+        code, _o, err = self.run_cli("stage", "--ticket", self.ticket)
+        self.assertEqual(code, 2)
+        self.assertIn("--root", err)
+
+    def test_an_older_backend_falls_back_to_the_manifest(self):
+        self.fake.no_listing = True
+        root = self.tree({"a.pdf": b"1"})
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out["uploaded"], 1)
+        self.assertEqual(self.fake.lists, [])
+
+    def test_the_manifest_fallback_never_sends_replace(self):
+        self.fake.no_listing = True  # an older /t/manifest refuses fields it does not know
+        root = self.tree({"a.pdf": b"1"})
+        code, _out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root), "a.pdf")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("replace", self.fake.manifests[0]["files"][0])
+
+    def test_an_older_backend_refuses_add_or_many_files(self):
+        self.fake.no_listing = True
+        att = self.dir / "u"
+        att.mkdir()
+        (att / "a.pdf").write_bytes(b"1")
+        code, _o, err = self.run_cli("stage", "--ticket", self.ticket, "--add", str(att / "a.pdf"))
+        self.assertEqual(code, 1)
+        self.assertIn("needs an update", err)
+
+    def test_a_dead_ticket_still_reads_as_expired_not_as_an_old_backend(self):
+        root = self.tree({"a.pdf": b"1"})
+        bad = f"{self.fake.base}/v1/connect/t#{'Z' * 43}"
+        code, _o, err = self.run_cli("stage", "--ticket", bad, "--root", str(root))
+        self.assertEqual(code, 1)
+        self.assertIn("expired", err)
+        self.assertNotIn("needs an update", err)
 
 
 class Multipart(Base):
@@ -703,44 +1327,54 @@ class Multipart(Base):
 
     def test_slices_upload_then_complete(self):
         root = self.tree({"big.bin": self.DATA, "a.pdf": b"1"})
-        self.fake.multipart = {"big.bin": [4, 4, 2]}
+        self.fake.multipart = {"src/big.bin": [4, 4, 2]}
         code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
         self.assertEqual(code, 0, err)
         self.assertIs(self.fake.manifests[0]["multipart"], True)
-        self.assertEqual([self.fake.puts[f"big.bin#{n}"][0] for n in (1, 2, 3)], [b"0123", b"4567", b"89"])
-        self.assertEqual(self.fake.puts["big.bin#3"][1]["Content-Length"], "2")
-        self.assertEqual(self.fake.completes, [{"complete": ["big.bin"], "abort": []}])
+        self.assertEqual([self.fake.puts[f"src/big.bin#{n}"][0] for n in (1, 2, 3)], [b"0123", b"4567", b"89"])
+        self.assertEqual(self.fake.puts["src/big.bin#3"][1]["Content-Length"], "2")
+        self.assertEqual(self.fake.completes, [{"complete": ["src/big.bin"], "abort": []}])
         self.assertEqual(out["uploaded"], 2)
         self.assertEqual(out["failed"], [])
 
+    def test_a_row_stored_in_another_case_is_still_sent_and_completed(self):
+        root = self.tree({"docs/plan.PDF": b"%PDF-1", "big.bin": self.DATA})
+        self.fake.stored = {"src/docs/plan.PDF": "Src/Docs/Plan.pdf", "src/big.bin": "SRC/BIG.bin"}
+        self.fake.multipart = {"src/big.bin": [4, 4, 2]}
+        code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.fake.puts["src/docs/plan.PDF"][0], b"%PDF-1")
+        self.assertEqual(self.fake.puts["src/big.bin#3"][0], b"89")
+        self.assertEqual((out["uploaded"], out["failed"]), (2, []))
+
     def test_a_failed_part_aborts_the_file(self):
         root = self.tree({"big.bin": self.DATA})
-        self.fake.multipart = {"big.bin": [4, 4, 2]}
-        self.fake.put_status = {"big.bin#2": 403}
+        self.fake.multipart = {"src/big.bin": [4, 4, 2]}
+        self.fake.put_status = {"src/big.bin#2": 403}
         code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
         self.assertEqual(code, 3)
-        self.assertEqual(out["failed"], ["big.bin"])
-        self.assertEqual(self.fake.completes, [{"complete": [], "abort": ["big.bin"]}])
+        self.assertEqual(out["failed"], ["src/big.bin"])
+        self.assertEqual(self.fake.completes, [{"complete": [], "abort": ["src/big.bin"]}])
         self.assertIn("expired", err)
 
     def test_parts_that_do_not_add_up_are_never_sent(self):
         root = self.tree({"big.bin": self.DATA})
-        self.fake.multipart = {"big.bin": [4, 4]}
+        self.fake.multipart = {"src/big.bin": [4, 4]}
         code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
         self.assertEqual(code, 3)
-        self.assertEqual(out["failed"], ["big.bin"])
+        self.assertEqual(out["failed"], ["src/big.bin"])
         self.assertFalse([p for m, p, _ in self.fake.requests if p.startswith("/part/")])
         # The upload is open server-side: an unusable plan is aborted, not just reported.
-        self.assertEqual(self.fake.completes, [{"complete": [], "abort": ["big.bin"]}])
+        self.assertEqual(self.fake.completes, [{"complete": [], "abort": ["src/big.bin"]}])
 
     def test_frontier_refusing_to_finish_fails_the_file(self):
         root = self.tree({"big.bin": self.DATA})
-        self.fake.multipart = {"big.bin": [4, 4, 2]}
-        self.fake.complete_fail = {"big.bin"}
+        self.fake.multipart = {"src/big.bin": [4, 4, 2]}
+        self.fake.complete_fail = {"src/big.bin"}
         code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
         self.assertEqual(code, 3)
-        self.assertEqual(out["failed"], ["big.bin"])
-        self.assertIn("Could not upload big.bin: parts missing or the wrong size", err)
+        self.assertEqual(out["failed"], ["src/big.bin"])
+        self.assertIn("Could not upload src/big.bin: parts missing or the wrong size", err)
 
     def test_malformed_complete_answer_fails_the_file_without_a_traceback(self):
         for raw in ({"completed": "big.bin", "failed": {"x": 1}}, [1, 2], {"completed": 7, "failed": True},
@@ -748,28 +1382,29 @@ class Multipart(Base):
             with self.subTest(raw=raw):
                 self.fake.completes.clear()
                 root = self.tree({"big.bin": self.DATA})
-                self.fake.multipart = {"big.bin": [4, 4, 2]}
+                self.fake.multipart = {"src/big.bin": [4, 4, 2]}
                 self.fake.complete_raw = raw
                 code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
                 self.assertEqual(code, 3, err)
-                self.assertEqual(out["failed"], ["big.bin"])
+                self.assertEqual(out["failed"], ["src/big.bin"])
                 self.assertNotIn("Traceback", err)
-                self.assertIn("Could not upload big.bin", err)
+                self.assertIn("Could not upload src/big.bin", err)
 
     def test_a_bad_parts_plan_never_falls_back_to_put_url(self):
         root = self.tree({"big.bin": self.DATA})
-        self.fake.extra_uploads = [{"path": "big.bin", "put_url": f"{self.fake.base}/put/9",
+        self.fake.extra_uploads = [{"path": "src/big.bin", "put_url": f"{self.fake.base}/put/9",
                                     "parts": [{"n": True, "size": 10, "put_url": f"{self.fake.base}/part/9"}],
                                     "headers": {}}]
         self.fake.skip_names = {"big.bin"}
         code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
         self.assertEqual(code, 3)
-        self.assertEqual(out["failed"], ["big.bin"])
+        self.assertEqual(out["failed"], ["src/big.bin"])
         self.assertFalse([p for m, p, _ in self.fake.requests if p.startswith(("/put/", "/part/"))])
 
     def test_a_400_on_multipart_retries_the_manifest_once_without_it(self):
         root = self.tree({"big.bin": self.DATA, "a.pdf": b"1"})
-        self.fake.multipart = {"big.bin": [4, 4, 2]}
+        self.fake.multipart = {"src/big.bin": [4, 4, 2]}
+        self.fake.no_listing = True
         self.fake.reject_multipart = True
         code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
         self.assertEqual(code, 0, err)
@@ -777,10 +1412,11 @@ class Multipart(Base):
         self.assertNotIn("multipart", self.fake.manifests[0])
         self.assertEqual(len(self.fake.manifests), 1)
         self.assertEqual(out["uploaded"], 2)
-        self.assertEqual(self.fake.puts["big.bin"][0], self.DATA)  # a single put_url
+        self.assertEqual(self.fake.puts["src/big.bin"][0], self.DATA)  # a single put_url
 
     def test_only_a_400_is_retried_and_only_once(self):
         root = self.tree({"a.pdf": b"1"})
+        self.fake.no_listing = True
         for status in (400, 403, 429, 500):
             with self.subTest(status=status):
                 self.fake.manifest_status = status
@@ -792,26 +1428,26 @@ class Multipart(Base):
 
     def test_one_failed_part_stops_the_files_remaining_parts(self):
         root = self.tree({"big.bin": self.DATA})
-        self.fake.multipart = {"big.bin": [4, 4, 2]}
-        self.fake.put_status = {"big.bin#1": 403}
+        self.fake.multipart = {"src/big.bin": [4, 4, 2]}
+        self.fake.put_status = {"src/big.bin#1": 403}
         with mock.patch.object(fr, "WORKERS", 1):
             code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
         self.assertEqual(code, 3)
         sent = [p for m, p, _ in self.fake.requests if m == "PUT"]
         self.assertEqual(len(sent), 1, sent)  # parts 2 and 3 were never PUT
-        self.assertEqual(out["failed"], ["big.bin"])
-        self.assertIn("Could not upload big.bin: the link expired", err)
-        self.assertEqual(self.fake.completes, [{"complete": [], "abort": ["big.bin"]}])
+        self.assertEqual(out["failed"], ["src/big.bin"])
+        self.assertIn("Could not upload src/big.bin: the link expired", err)
+        self.assertEqual(self.fake.completes, [{"complete": [], "abort": ["src/big.bin"]}])
 
     def test_a_failed_file_does_not_stop_the_other_files(self):
         root = self.tree({"big.bin": self.DATA, "other.bin": self.DATA})
-        self.fake.multipart = {"big.bin": [4, 4, 2], "other.bin": [4, 4, 2]}
-        self.fake.put_status = {"big.bin#1": 403}
+        self.fake.multipart = {"src/big.bin": [4, 4, 2], "src/other.bin": [4, 4, 2]}
+        self.fake.put_status = {"src/big.bin#1": 403}
         with mock.patch.object(fr, "WORKERS", 1):
             code, out, err = self.run_cli("stage", "--ticket", self.ticket, "--root", str(root))
         self.assertEqual(code, 3)
-        self.assertEqual(out["failed"], ["big.bin"])
-        self.assertEqual([self.fake.puts[f"other.bin#{n}"][0] for n in (1, 2, 3)], [b"0123", b"4567", b"89"])
+        self.assertEqual(out["failed"], ["src/big.bin"])
+        self.assertEqual([self.fake.puts[f"src/other.bin#{n}"][0] for n in (1, 2, 3)], [b"0123", b"4567", b"89"])
 
     def test_the_codex_manifest_version_matches_the_user_agent_too(self):
         manifest = json.loads((HERE.parent.parent / "plugin" / ".codex-plugin" / "plugin.json").read_text())
@@ -1838,6 +2474,61 @@ class Cli(Base):
         p = self._run("stage", "--ticket", self.ticket, "--root", str(self.dir / "nope"),
                       "--base", self.fake.base)
         self.assertEqual(p.returncode, 2)
+
+
+class SkillText(unittest.TestCase):
+    """The skill's words the model acts on (owner decisions D1 and the final review)."""
+
+    def setUp(self) -> None:
+        text = (HERE.parent.parent / "plugin" / "skills" / "frontier" / "SKILL.md").read_text()
+        self.flat = " ".join(text.split())
+
+    def test_files_asked_for_go_with_add_or_after_a_single_root(self):
+        self.assertIn("with `--add` for files outside the folder, or their paths after a single "
+                      "`--root`", self.flat)
+
+    def test_the_outcome_table_covers_an_update_and_a_refusal(self):
+        self.assertIn("exits 1 with \"needs an update\"", self.flat)
+        self.assertIn("suggest updating the Frontier plugin", self.flat)
+        self.assertIn("\"do not fit\"", self.flat)
+        self.assertIn("ask the user to name fewer files", self.flat)
+
+    def test_the_examples_say_the_ticket_comes_on_stdin(self):
+        self.assertIn("`--ticket -` reads the link from stdin", self.flat)
+
+    def test_named_subfolders_are_judged_and_named_files_are_sent(self):
+        self.assertIn("Frontier judges the files in a subfolder you name", self.flat)
+        self.assertIn("Files you name or `--add` are always sent", self.flat)
+        self.assertNotIn("Frontier always keeps the ones you list", self.flat)
+
+    def test_exit_3_with_a_named_or_added_file_failed_is_retried_not_started(self):
+        self.assertIn("| `stage` exits 3 with `explicit_failed` (a file you named or added), or "
+                      "nothing was sent | Get a new ticket with `frontier_request_upload` for the "
+                      "same `task_id`, `stage` only the files that failed once more, and start only "
+                      "when they are in.", self.flat)
+        self.assertNotIn("`stage` exits 0 or 3 | Start", self.flat)
+
+    def test_a_ticket_still_finishing_says_wait(self):
+        self.assertIn("\"this ticket's listing is being finished\" (HTTP 409) | An earlier `stage` "
+                      "on that ticket is still running (give `stage` a timeout of at least 5 "
+                      "minutes). Wait up to 5 minutes for it to end, then get a new ticket "
+                      "(`frontier_request_upload` with the same `task_id`) and run the same `stage` "
+                      "again: the files are listed and sent again.", self.flat)
+        self.assertNotIn("don't stage again on that ticket", self.flat)
+
+    def test_each_folder_goes_up_under_its_own_name(self):
+        self.assertIn("Each folder goes up under its own name (`2024/statement.pdf`, never "
+                      "`statement.pdf`)", self.flat)
+        self.assertNotIn("top of the folder are never sent", self.flat)
+        self.assertIn("Another folder whose name the task already holds (a different `2024`, or "
+                      "the same folder moved or renamed) goes up alongside as `2024 (2)`", self.flat)
+        self.assertIn("two different folders of the same name connected in different sessions "
+                      "count as the same folder", self.flat)
+
+    def test_another_attachment_of_the_same_name_is_kept_alongside(self):
+        self.assertIn("An attached file whose name the task already holds is sent again in place "
+                      "when it has the same size; another file of that name is kept alongside as "
+                      "`name (2).ext`", self.flat)
 
 
 if __name__ == "__main__":

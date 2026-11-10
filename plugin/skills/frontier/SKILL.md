@@ -26,10 +26,13 @@ instead.
 
 ## How a Frontier task goes
 
-1. **Files in (if the work needs the user's files).** Local files or a folder: follow "Send
-   files or a folder to a new task" below. If the helper can't run or can't reach Frontier,
-   call `frontier_add_files` with the user's request; the user picks the files in the card,
-   which then posts a message with the `upload_id`.
+1. **Files in (if the work needs the user's files).** Local files, a folder, or files
+   the user attached to this chat (already in your workspace): follow "Upload states" below, and
+   "Send files or a folder to a new task" for the details. If the helper can't run or can't reach Frontier, call `frontier_add_files` with the user's
+   request; the user picks the files in the card, which then posts a message with the
+   `upload_id`. If that message does not come, or the user says the files are in, call
+   `frontier_get_task` with the `upload_id`: it lists the files that arrived and says how to
+   start the task. Never start a task that needs files without them.
 2. **Start.** Call `frontier_start_task` with the user's request verbatim (rule 2), plus
    `upload_id` if files went in. Skip step 1 when there are no files.
 3. **Follow it.** Keep the task card visible. Call `frontier_wait_task` with the returned
@@ -134,20 +137,59 @@ Copilot runs the same steps, with two differences:
 
 1. Call `frontier_request_upload` **without** `files`, with `instruction` set to the user's
    request verbatim (rule 2). It returns `task_id` and `ticket_url`.
-2. Run `frontier.py stage --ticket <ticket_url> --root <folder>`. To send only some files or
-   subfolders, list them after the options (paths inside the folder); Frontier always keeps
-   the ones you list.
+2. Run `frontier.py stage --ticket <ticket_url> --root <folder>` (repeat `--root` for several
+   folders, and add `--add <file>` for each file outside them; see "Upload states"). To send only
+   some files or subfolders of one folder, list them after the options (paths inside the folder):
+   files you name are always sent; Frontier judges the files in a subfolder you name.
 3. Call `frontier_start_task` with the user's request verbatim (rule 2) and `upload_id` set to
    the returned `task_id`.
 4. Tell the user how many files went up, and that the rest stay listed so Frontier can ask for
    them if the task needs them.
 
-A folder with more than 1000 files, or more than 2 GiB, is refused: ask the user to pick a
-subfolder or the files that matter. Hidden files, Office lock files (`~$...`) and linked
+Past 20,000 files the helper lists the first 20,000 and says so: ask the user which subfolders
+matter. Hidden files, Office lock files (`~$...`) and linked
 folders are skipped unless listed by name. Links that point outside the folder are never sent:
-the walk skips them, and listing one is refused. `context.md` and `folder-index.md` at the
-top of the folder are never sent (Frontier writes those itself); the helper says so, and the user
-can rename them to send them.
+the walk skips them, and listing one is refused. Each folder goes up under its own name
+(`2024/statement.pdf`, never `statement.pdf`), so two folders sent to one task never overwrite
+each other and a re-run keeps the same paths; attached files go under `attached/` (a folder
+named `attached` goes up as `attached (2)`). Another folder whose name the task already holds (a
+different `2024`, or the same folder moved or renamed) goes up alongside as `2024 (2)`; the
+helper says so. A folder connected to a session (mounted under `mnt/`) is known by its name
+there, so two different folders of the same name connected in different sessions count as the
+same folder.
+
+## Upload states
+
+Sending files is three steps, and the task starts only after the second:
+
+1. `frontier_request_upload` without `files`, with the user's request verbatim (rule 2): returns `task_id` (the upload id) and `ticket_url` (10 minutes).
+2. One `stage`, with everything the request needs:
+   - a connected folder or project folder: `--root <folder>` (repeat for several);
+   - a file attached to the chat (already in your workspace, for example under `/mnt/user-data/uploads`) or named by path outside the folder: `--add <file>` (repeat);
+   - files or subfolders the user named inside a single folder: list them after the options.
+   The helper lists the folder (up to 20,000 files, by name and size only) and Frontier keeps what the request needs. Files you name or `--add` are always sent; Frontier judges the files in a subfolder you name, like the rest of a folder. An attached file whose name the task already holds is sent again in place when it has the same size; another file of that name is kept alongside as `name (2).ext` (the helper says which path it used).
+3. `frontier_start_task` with `upload_id` set to that `task_id`.
+
+| If | Then |
+|---|---|
+| `stage` exits 0, or 3 with only folder files failed | Start (step 3). Say how many files went up; for exit 3, which failed. |
+| `stage` exits 3 with `explicit_failed` (a file you named or added), or nothing was sent | Get a new ticket with `frontier_request_upload` for the same `task_id`, `stage` only the files that failed once more, and start only when they are in. If they fail again, tell the user what failed and ask before starting. |
+| `stage` exits 1 with "needs an update" | Relay its message and suggest updating the Frontier plugin. |
+| Frontier refused the request: the files "do not fit" | Relay the message (it names the files) and ask the user to name fewer files. |
+| "this ticket's listing is being finished" (HTTP 409) | An earlier `stage` on that ticket is still running (give `stage` a timeout of at least 5 minutes). Wait up to 5 minutes for it to end, then get a new ticket (`frontier_request_upload` with the same `task_id`) and run the same `stage` again: the files are listed and sent again. |
+| "the link expired" | `frontier_request_upload` again with the same `task_id`, then `stage` again. |
+| It can't reach Frontier, or network settings block it | Relay its message; `frontier_add_files` with the same `task_id`. |
+| You lost track, or the user says the files are in | `frontier_get_task` with the upload id: it lists what arrived. |
+| Frontier asks for more files | `frontier_request_upload` with the chat's `task_id`, `stage` the files asked for, then `frontier_continue_task`. |
+
+Never open or read files to choose them: the helper and Frontier choose from names and sizes.
+Naming files in `assistant_notes` does not send them. Don't ask the user to pick attached files
+again in the card.
+
+Examples (`--ticket -` reads the link from stdin, so it stays off the command line):
+- Folder: `stage --ticket - --root "<folder>"`
+- Attached files: `stage --ticket - --add "<file 1>" --add "<file 2>"`
+- Both: `stage --ticket - --root "<folder>" --add "<file>"`
 
 ## Send data you gathered
 
@@ -174,7 +216,8 @@ When the task asks for more files (the card says "Frontier needs a file"), or th
 to a follow-up:
 
 1. Call `frontier_request_upload` with the chat's `task_id` (and no `files`).
-2. Run `stage` as above, listing the files the task asked for.
+2. Run `stage` as above for the files the task asked for: with `--add` for files outside the
+   folder, or their paths after a single `--root`.
 3. Call `frontier_continue_task` with the `task_id` and a short note saying what you added (for
    example "I uploaded the 2023 statements you asked for."). This note is the exception to
    rule 2; if the user also asked for something more, add their words verbatim. That turn

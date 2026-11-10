@@ -36,11 +36,15 @@ Hand over the whole task, in the user's words, rather than splitting it into pie
 unsure, continue. In a new chat where the user refers to earlier work, find that task with
 `frontier_list_tasks` and continue it.
 
-1. **Files first.** With the Frontier plugin, follow its `frontier` skill: it uploads a whole
-   folder through one ticket and saves delivered files back with `frontier_request_download`.
-   Without it (or when its helper cannot reach Frontier), call `frontier_add_files` with the
-   user's request: the user picks the files or a folder in the card, and the card posts a message
-   with the `upload_id` once they are in. Do not upload the files yourself.
+1. **Files first.** With the Frontier plugin, follow its `frontier` skill: `frontier_request_upload`
+   (no `files`) returns a ticket, one helper `stage` with `--root <folder>` for each connected
+   folder and `--add <file>` for each file attached to the chat sends them (Frontier keeps what
+   the request needs, and always the attached and named files), and then `frontier_start_task`
+   takes that upload id. Never start a task that needs files before `stage` finished; to check
+   what arrived, call `frontier_get_task` with the `upload_id`. Without the plugin (or when its
+   helper cannot reach Frontier), call `frontier_add_files` with the user's request: the user
+   picks the files or a folder in the card, which posts a message with the `upload_id` once they
+   are in. Naming files in `assistant_notes` does not send them.
 2. **Start.** Call `frontier_start_task` with the user's request, `upload_id` set to the
    `upload_id` from the card's message (or, with the plugin, the `task_id` the upload returned;
    the card needs no file names), and any playbook skills as `playbook/skill`. Set `may_ask` to true if the user is around to answer questions.
