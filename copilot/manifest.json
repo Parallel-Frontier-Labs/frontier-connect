@@ -1,7 +1,7 @@
 {
   "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.28/MicrosoftTeams.schema.json",
   "manifestVersion": "1.28",
-  "version": "0.2.9",
+  "version": "0.3.0",
   "id": "cf30606b-6730-4ca7-8949-dd97b7761d06",
   "developer": {
     "name": "Parallel Frontier Labs",
@@ -21,7 +21,7 @@
     "color": "color.png",
     "outline": "outline.png"
   },
-  "accentColor": "#00203F",
+  "accentColor": "#14130F",
   "agentSkills": [
     { "folder": "./skills/frontier" }
   ],

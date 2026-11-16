@@ -64,7 +64,7 @@ WORKERS = 4
 TIMEOUT_S = 60
 MAX_JSON_BYTES = 32 * 1024 * 1024
 CHUNK = 1024 * 1024
-USER_AGENT = "frontier-plugin/0.2.9"
+USER_AGENT = "frontier-plugin/0.3.0"
 DEFAULT_MIME = "application/octet-stream"
 
 EXPIRED = ("This Frontier link has expired or was already used. Ask the assistant to request a "

@@ -1,14 +1,15 @@
 /** Inline SVG icons drawn from the card design. Colours come from CSS custom properties. */
 
-/** The Frontier mark (three skewed bars), theme-aware through --mark-bg / --mark-fg. */
+/** The Parallel Frontier emblem (the designer's file, 539.31 x 562.56) on a rounded tile, its height 56% of the
+ *  tile's, theme-aware through --mark-bg / --mark-fg. */
 export function Mark() {
   return (
     <svg class="fc-logo" width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="Parallel Frontier">
       <rect width="100" height="100" rx="22" fill="var(--mark-bg)" />
-      <g transform="translate(0 20.2) skewY(-22)" fill="var(--mark-fg)">
-        <rect x="30.5" y="22.75" width="39" height="13.5" />
-        <rect x="23" y="43.25" width="54" height="13.5" />
-        <rect x="30.5" y="63.75" width="39" height="13.5" />
+      <g transform="translate(23.157 22) scale(0.099545)" fill="var(--mark-fg)">
+        <polygon points="343.32 125.88 343.32 0 0 199.21 0 325.09 343.32 125.88" />
+        <polygon points="539.31 12.1 539.31 138.09 195.98 337.24 195.98 436.65 .02 550.42 .02 424.51 343.31 225.28 343.31 125.88 539.31 12.1" />
+        <polygon points="539.31 237.46 539.31 363.3 195.98 562.56 195.98 436.65 539.31 237.46" />
       </g>
     </svg>
   );
